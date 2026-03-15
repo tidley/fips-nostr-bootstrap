@@ -38,10 +38,14 @@ npm run test:transport
 
 ### Two-computer test via Nostr DM (client input = only npub)
 
-Set env on both machines:
+Set relays on both machines (optional, defaults are built in):
+```bash
+export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net"
+```
+
+Optional (if you want a fixed identity instead of auto-generated ephemeral key):
 ```bash
 export NOSTR_NSEC=<your_nsec>
-export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net"
 ```
 
 On **server machine**:
@@ -50,7 +54,7 @@ On **server machine**:
 export FIPS_UDP_PUBLIC_HOST=<server_public_or_routable_ip>
 node scripts/udp-transport-via-nostr.mjs --mode server --port 9999
 ```
-Server prints its `npub`.
+Server prints its generated/loaded `npub` (copy this to client).
 
 On **client machine**:
 ```bash

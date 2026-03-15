@@ -2,7 +2,7 @@
 import dgram from 'node:dgram';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { SimplePool, finalizeEvent, getPublicKey, nip04, nip19 } from 'nostr-tools';
+import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip04, nip19 } from 'nostr-tools';
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -35,12 +35,14 @@ function parseArgs() {
   return out;
 }
 
-function decodeNsecFromEnv() {
+function resolveSecretKey() {
   const nsec = process.env.NOSTR_NSEC;
-  if (!nsec) throw new Error('NOSTR_NSEC env var is required');
+  if (!nsec) {
+    return { sk: generateSecretKey(), source: 'generated-ephemeral' };
+  }
   const decoded = nip19.decode(nsec);
   if (decoded.type !== 'nsec') throw new Error('NOSTR_NSEC must be valid nsec');
-  return decoded.data;
+  return { sk: decoded.data, source: 'env-nsec' };
 }
 
 function relaysFromEnv() {
@@ -107,7 +109,7 @@ function publishDM({ pool, relays, sk, senderPubkey, recipientPubkey, content })
 }
 
 async function runServer(cfg) {
-  const sk = decodeNsecFromEnv();
+  const { sk, source: keySource } = resolveSecretKey();
   const relays = relaysFromEnv();
   const pool = new SimplePool();
   const senderPubkey = getPublicKey(sk);
@@ -152,6 +154,7 @@ async function runServer(cfg) {
         mode: 'server',
         relayCount: relays.length,
         identity: nip19.npubEncode(senderPubkey),
+        keySource,
         listening: cfg.showEndpoints ? `${addr.address}:${addr.port}` : '[hidden]',
         advertisedEndpoint: cfg.showEndpoints ? `${advertiseHost}:${addr.port}` : '[hidden-discovered-via-dm]',
         note: 'Client only needs --npub. Stop with Ctrl+C.',
@@ -176,7 +179,7 @@ async function runClient(cfg) {
   if (decoded.type !== 'npub') throw new Error('--npub must be valid npub');
   const serverPubkey = decoded.data;
 
-  const sk = decodeNsecFromEnv();
+  const { sk, source: keySource } = resolveSecretKey();
   const relays = relaysFromEnv();
   const pool = new SimplePool();
   const senderPubkey = getPublicKey(sk);
@@ -270,6 +273,8 @@ async function runClient(cfg) {
     JSON.stringify(
       {
         mode: 'client',
+        identity: nip19.npubEncode(senderPubkey),
+        keySource,
         rendezvous: {
           viaNostrDM: true,
           serverNpub: cfg.npub,
