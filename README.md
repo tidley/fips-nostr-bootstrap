@@ -1,88 +1,97 @@
 # FIPS Nostr Bootstrap
 
-Prototype where **Nostr is signalling-only** and FIPS transport is direct UDP (with fallback).
+This repo now contains a working prototype of:
 
-## Implemented in this repo
+1. **NIP-17 Nostr rendezvous** (bootstrap signalling)
+2. **UDP hole punching** (simultaneous outbound probe window)
+3. **Direct UDP test traffic** after establishment
+4. **Duplex stream simulation** (~10MB each way by default)
 
-### Protocol + artifacts
-- `docs/protocol-spec-v0.2.md` — protocol phases, security boundary, deterministic state model
-- `docs/message-schema.json` — required common signalling fields
-- `docs/state-machine.mmd` — state machine diagram (Mermaid)
-- `docs/nat-test-plan.md` — NAT traversal test matrix and metrics
-- `docs/failure-taxonomy.md` — failure classes + refinement checklist
+> Note: this is transport/rendezvous engineering work. It is **not** a FIPS 140 validation claim.
 
-### Reference implementation modules (`src/`)
-- `identity.ts` — nonce/session generation + message signing/verification
-- `signal_nostr.ts` — in-memory signalling adapter abstraction (Nostr role)
-- `handshake.ts` — deterministic state machine with replay/timestamp/expiry checks
-- `nat_probe.ts` — direct UDP probe strategy model
-- `session.ts` — post-bootstrap session binding store
-- `fallback.ts` — fallback decision logic
-- `metrics.ts` — handshake/direct/fallback metrics
-- `test_harness.ts` — deterministic local integration harness
+---
 
-## Quick start
+## Current status
+
+- ✅ NIP-17 DM bootstrap works
+- ✅ NIP-42 relay auth path wired
+- ✅ Hole punching works in tested environment
+- ✅ Duplex 10MB each-way simulation works
+- ✅ Quick latency benchmark runs after punch
+
+Known caveats:
+- NAT behavior varies; symmetric NAT may still require fallback relay paths
+- relay quality/rate limits affect bootstrap reliability
+
+---
+
+## Fast demo (2 machines)
+
+Use same relay list on both sides (example):
+
+```bash
+export NOSTR_RELAYS="wss://nos.lol"
+```
+
+### 1) Start server (machine A)
+
+```bash
+node scripts/udp-transport-via-nostr.mjs --mode server --port 9999 --debug
+```
+
+Copy printed `identity` (`npub...`).
+
+### 2) Start client (machine B)
+
+```bash
+node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --wait 60000 --debug
+```
+
+If successful, final JSON includes:
+- `rendezvous.endpointDiscovered: true`
+- `punching.established: true`
+- `duplex.localSentBytes/localReceivedBytes` (~10MB)
+- latency and speed metrics
+
+---
+
+## Useful flags
+
+```bash
+--rounds 10                     # ping rounds (default 10)
+--timeout 3000                  # ping timeout per probe
+--retry-ms 5000                 # DM resend interval
+--punch-interval-ms 300         # punch send cadence
+--punch-duration-ms 30000       # punch window length
+--punch-start-delay-ms 3000     # coordinated start delay
+--duplex-bytes 10485760         # per-direction stream size (10MB)
+--duplex-chunk-bytes 1200       # UDP payload chunk
+--duplex-interval-ms 0           # stream pacing
+--duplex-timeout-ms 90000       # wait for remote stream completion
+--show-endpoints                # print endpoint addresses in output
+--debug                         # verbose logs
+```
+
+---
+
+## Standalone library
+
+A standalone package scaffold now exists at:
+
+`packages/fips-nostr-rendezvous`
+
+Package name:
+
+`@fips/nostr-rendezvous`
+
+This is the reusable library layer for trusted-npub rendezvous + punch establishment, so you can hand off the connected UDP socket/remote tuple to higher-level protocols (shell, file transfer, media).
+
+---
+
+## Dev
 
 ```bash
 npm install
 npm run build
 npm test
 ```
-
-## Real transport latency/speed test (runnable from repo)
-
-### Single-host quick check
-```bash
-npm run test:transport
-```
-
-### Two-computer test via Nostr DM (client input = only npub)
-
-Set relays on both machines (optional, defaults are built in):
-```bash
-export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net,wss://nip17.tomdwyer.uk"
-```
-
-Optional (if you want a fixed identity instead of auto-generated ephemeral key):
-```bash
-export NOSTR_NSEC=<your_nsec>
-```
-
-On **server machine**:
-```bash
-# Optional: advertised host override if auto-detect is wrong
-export FIPS_UDP_PUBLIC_HOST=<server_public_or_routable_ip>
-node scripts/udp-transport-via-nostr.mjs --mode server --port 9999 --debug
-```
-Server prints its generated/loaded `npub` (copy this to client).
-
-On **client machine**:
-```bash
-node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 10 --payload 256 --warmup 3 --timeout 3000 --debug
-
-# Optional hole-punch tuning
-# --retry-ms 5000 --punch-interval-ms 300 --punch-duration-ms 30000 --punch-start-delay-ms 3000
-
-# Optional duplex "video-call style" UDP simulation (simultaneous both ways)
-# --duplex-bytes 10485760 --duplex-chunk-bytes 1200 --duplex-interval-ms 0 --duplex-timeout-ms 90000
-```
-
-The client discovers endpoint info through encrypted Nostr DM handshake, performs simultaneous UDP hole punching, then runs UDP latency/speed benchmark.
-
-(Implementation detail: NIP-17 gift-wrap events use randomized `created_at`, so subscriptions intentionally use a wider `since` window.)
-
-Outputs JSON including:
-- setup time (first successful probe RTT + setup duration)
-- RTT stats (avg/p50/p95/p99/min/max)
-- estimated throughput (Mbps)
-
-Notes:
-- Client requires only `--npub` as input.
-- Script now attempts NIP-42 AUTH automatically when relay requires auth.
-- Allow inbound UDP on server port (example: 9999).
-- Add `--show-endpoints` if you want endpoint addresses printed in output.
-
-## Notes
-- Relays are coordination-only; data plane leaves Nostr after connect-confirm.
-- Replay safety is enforced with nonce cache + monotonic timestamp checks.
-- Direct establishment attempts are bounded; failures transition cleanly to fallback.

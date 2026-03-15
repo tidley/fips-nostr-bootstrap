@@ -1,0 +1,18 @@
+{
+  "name": "@fips/nostr-rendezvous",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Nostr (NIP-17) rendezvous + UDP hole punching for FIPS transport handoff",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "dependencies": {
+    "nostr-tools": "^2.17.0",
+    "ws": "^8.18.0"
+  }
+}
