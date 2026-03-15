@@ -88,6 +88,36 @@ This is the reusable library layer for trusted-npub rendezvous + punch establish
 
 ---
 
+## Web demo UI + shell command agent
+
+This repo now also includes a minimal end-to-end demo:
+
+- `apps/fips-shell-server.mjs` (receiver/command executor)
+- `apps/fips-web-console.mjs` (browser UI sender)
+
+### Run receiver (machine B)
+
+```bash
+node apps/fips-shell-server.mjs --udp-port 9999 --trusted-npubs "<WEB_UI_NPUB>"
+```
+
+It prints its `npub`.
+
+### Run web UI sender (machine A)
+
+```bash
+node apps/fips-web-console.mjs --http-port 8787 --udp-port 0
+```
+
+Open `http://127.0.0.1:8787`, paste server npub, click **Connect**, then send commands.
+
+Security notes:
+- This is a prototype remote command channel, **not full SSH protocol** yet.
+- Keep trusted npub allowlist strict.
+- Run with low-privilege user in testing.
+
+---
+
 ## Dev
 
 ```bash
