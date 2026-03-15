@@ -66,8 +66,8 @@ const html = `<!doctype html>
 
   <div class="row controls">
     <button id="toggleCall" class="primary" style="display:none">Join call</button>
-    <button id="toggleCam">Turn off camera</button>
-    <button id="mute">Mute mic</button>
+    <button id="toggleCam">Turn on camera</button>
+    <button id="mute">Unmute mic</button>
     <button id="speaker">Mute speaker</button>
   </div>
 
@@ -118,9 +118,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let peerNpub = null;
   let peerPubkey = null;
   let peerReachable = false;
-  let micMuted = false;
+  let micMuted = true;
   let speakerMuted = false;
-  let camEnabled = true;
+  let camEnabled = false;
   let callActive = false;
   let pendingRemoteOffer = null;
   let scanStream = null;
@@ -437,7 +437,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
     localVideo.srcObject = localStream;
-    status('camera+mic started');
+    for (const t of localStream.getVideoTracks()) t.enabled = camEnabled;
+    for (const t of localStream.getAudioTracks()) t.enabled = !micMuted;
+    status('media ready');
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
   }
 
@@ -570,15 +572,19 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (callActive) endCall();
     else startCall().catch((e) => status('call error: ' + e.message));
   };
-  document.getElementById('toggleCam').onclick = () => {
-    if (!localStream) return;
+  document.getElementById('toggleCam').onclick = async () => {
+    if (!localStream) {
+      try { await startCamera(); } catch (e) { status('camera error: ' + e.message); return; }
+    }
     camEnabled = !camEnabled;
     for (const t of localStream.getVideoTracks()) t.enabled = camEnabled;
     document.getElementById('toggleCam').textContent = camEnabled ? 'Turn off camera' : 'Turn on camera';
     status(camEnabled ? 'camera on' : 'camera off');
   };
-  document.getElementById('mute').onclick = () => {
-    if (!localStream) return;
+  document.getElementById('mute').onclick = async () => {
+    if (!localStream) {
+      try { await startCamera(); } catch (e) { status('mic error: ' + e.message); return; }
+    }
     micMuted = !micMuted;
     for (const t of localStream.getAudioTracks()) t.enabled = !micMuted;
     document.getElementById('mute').textContent = micMuted ? 'Unmute mic' : 'Mute mic';
@@ -592,7 +598,6 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   startListening();
-  startCamera().catch((e) => status('camera auto-start error: ' + e.message));
 })();
 </script>
 </body>

@@ -164,8 +164,9 @@ Flow:
 1. Receiver opens page and waits (already listening).
 2. Initiator scans/pastes receiver npub and clicks **Send Request**.
 3. Receiver sees incoming request and clicks **Accept**.
-4. Camera+mic auto-start on page load (or browser permission prompt).
-5. One side clicks **Join call**.
+4. Camera and mic start OFF by default.
+5. Enable camera/mic with controls as needed.
+6. One side clicks **Join call**.
 6. Same button toggles to **End call** to tear down the peer connection.
 
 Notes:
