@@ -184,6 +184,7 @@ Notes:
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
 - FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
 - Local preview is smaller; remote video is larger.
+- Remote video now adapts to sender aspect ratio (e.g., laptop landscape on phone receivers).
 - Prototype quality: no auth hardening/recording yet.
 
 ## SSH-like demos

@@ -45,7 +45,9 @@ const html = `<!doctype html>
 
     .stage { flex:1; padding:10px 16px 6px; display:none; }
     .videoStage { position:relative; border-radius:22px; overflow:hidden; background:#111; min-height:56vh; border:1px solid #3c4043; }
-    #remoteVideo { width:100%; height:100%; object-fit:cover; background:#111; }
+    #remoteVideo { width:100%; height:100%; object-fit:contain; background:#111; }
+    .remote-landscape #remoteVideo { object-fit:contain; }
+    .remote-portrait #remoteVideo { object-fit:cover; }
     #localVideo { position:absolute; right:16px; top:16px; width:22%; min-width:160px; max-width:280px; border-radius:12px; border:1px solid #3c4043; background:#000; object-fit:cover; }
     .overlayStatus { position:absolute; left:14px; top:14px; padding:8px 10px; border-radius:12px; background:rgba(32,33,36,.72); font-size:12px; color:#d2d7dc; backdrop-filter: blur(6px); }
 
@@ -396,6 +398,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     pc.ontrack = (e) => {
       remoteVideo.srcObject = e.streams[0];
+      const stage = document.querySelector('.videoStage');
+      const applyRatioClass = () => {
+        const vw = remoteVideo.videoWidth || 0;
+        const vh = remoteVideo.videoHeight || 0;
+        if (!vw || !vh || !stage) return;
+        stage.classList.remove('remote-landscape', 'remote-portrait');
+        if (vw >= vh) stage.classList.add('remote-landscape');
+        else stage.classList.add('remote-portrait');
+      };
+      remoteVideo.onloadedmetadata = applyRatioClass;
+      remoteVideo.onresize = applyRatioClass;
+      applyRatioClass();
       setState('connected', 'Remote media connected');
     };
 
