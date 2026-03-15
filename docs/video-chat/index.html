@@ -98,7 +98,10 @@
         <img id="qr" alt="npub QR" />
         <div class="muted" style="margin-top:8px">Your ephemeral npub</div>
         <div id="myNpub"></div>
-        <button id="copyNpub" style="margin-top:8px">Copy npub</button>
+        <div class="row" style="justify-content:center;margin-top:8px">
+          <button id="copyNpub">Copy npub</button>
+          <button id="copyNsec">Copy nsec</button>
+        </div>
       </div>
     </section>
 
@@ -690,6 +693,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   document.getElementById('openInfo').onclick = () => infoModal.showModal();
   document.getElementById('closeInfo').onclick = () => infoModal.close();
   document.getElementById('copyNpub').onclick = async () => navigator.clipboard.writeText(myNpub);
+  document.getElementById('copyNsec').onclick = async () => {
+    const nsec = sessionStorage.getItem('fips_video_nsec');
+    if (!nsec) return setState('failed', 'No nsec set (using ephemeral identity)');
+    await navigator.clipboard.writeText(nsec);
+    setState('connected', 'nsec copied to clipboard');
+  };
 
   document.getElementById('useNsec').onclick = () => {
     const nsec = prompt('Paste nsec (kept in sessionStorage for this browser session):');
