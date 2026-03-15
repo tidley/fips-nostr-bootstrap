@@ -43,12 +43,16 @@ const html = `<!doctype html>
   </div>
 
   <div class="row">
-    <input id="peerNpub" placeholder="Peer npub (paste or scan)" />
+    <input id="peerNpub" placeholder="Peer npub (initiator fills this)" />
     <button id="scan">Scan QR</button>
     <button id="connect">Connect</button>
   </div>
   <div class="row" id="scanWrap" style="display:none">
     <video id="scanVideo" autoplay playsinline style="max-width:320px;border:1px solid #ccc;border-radius:8px"></video>
+  </div>
+  <div id="incomingWrap" style="margin:8px 0;padding:8px;border:1px solid #ddd;border-radius:8px;display:none">
+    <strong>Incoming connection requests</strong>
+    <div id="incomingList"></div>
   </div>
 
   <div class="row">
@@ -77,6 +81,8 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   const qrEl = document.getElementById('qr');
   const scanWrap = document.getElementById('scanWrap');
   const scanVideo = document.getElementById('scanVideo');
+  const incomingWrap = document.getElementById('incomingWrap');
+  const incomingList = document.getElementById('incomingList');
 
   const sk = generateSecretKey();
   const pub = getPublicKey(sk);
@@ -94,8 +100,35 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   let speakerMuted = false;
   let scanStream = null;
   let scanTimer = null;
+  const pendingRequests = new Map();
+  const allowedPeers = new Set();
 
   function status(s) { statusEl.textContent = 'Status: ' + s; }
+
+  function renderIncoming() {
+    const entries = Array.from(pendingRequests.keys());
+    incomingWrap.style.display = entries.length ? 'block' : 'none';
+    incomingList.innerHTML = '';
+    for (const from of entries) {
+      const row = document.createElement('div');
+      row.style.marginTop = '6px';
+      row.innerHTML = '<code style="font-size:12px">' + from + '</code> <button data-from="' + from + '">Accept</button>';
+      incomingList.appendChild(row);
+    }
+    incomingList.querySelectorAll('button[data-from]').forEach((btn) => {
+      btn.onclick = () => {
+        const from = btn.getAttribute('data-from');
+        pendingRequests.delete(from);
+        renderIncoming();
+        allowedPeers.add(from);
+        peerNpub = from;
+        peerNpubEl.value = from;
+        send({ type: 'probe_ack', to: from });
+        peerReachable = true;
+        status('accepted peer ' + from.slice(0, 16) + '...');
+      };
+    });
+  }
 
   function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -182,35 +215,49 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   }
 
   function connectSignal() {
-    peerNpub = peerNpubEl.value.trim();
-    if (!peerNpub.startsWith('npub')) return status('invalid peer npub');
+    peerNpub = peerNpubEl.value.trim() || null;
+    if (peerNpub && !peerNpub.startsWith('npub')) return status('invalid peer npub');
 
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
 
     ws.onopen = () => {
       send({ type: 'hello', npub: myNpub });
-      send({ type: 'probe', to: peerNpub });
-      status('signaling connected as ' + myNpub.slice(0, 16) + '... (probing peer)');
+      if (peerNpub) {
+        allowedPeers.add(peerNpub);
+        send({ type: 'probe', to: peerNpub });
+        status('signaling connected; probing peer...');
+      } else {
+        status('signaling connected; waiting for incoming request');
+      }
     };
 
     ws.onmessage = async (ev) => {
       const msg = JSON.parse(ev.data);
       if (!msg) return;
 
-      if (msg.type === 'peer-online' && msg.npub === peerNpub) {
+      if (msg.type === 'peer-online' && peerNpub && msg.npub === peerNpub) {
         status('peer is online');
       }
 
-      if (msg.type === 'probe' && msg.from === peerNpub) {
-        send({ type: 'probe_ack', to: peerNpub });
+      if (msg.type === 'probe') {
+        if (!allowedPeers.has(msg.from)) {
+          pendingRequests.set(msg.from, true);
+          renderIncoming();
+          status('incoming request from ' + msg.from.slice(0, 16) + '...');
+        } else {
+          send({ type: 'probe_ack', to: msg.from });
+        }
       }
 
-      if (msg.type === 'probe_ack' && msg.from === peerNpub) {
+      if (msg.type === 'probe_ack' && (!peerNpub || msg.from === peerNpub)) {
+        peerNpub = msg.from;
+        peerNpubEl.value = msg.from;
+        allowedPeers.add(msg.from);
         peerReachable = true;
-        status('peer reachable: ' + peerNpub.slice(0, 16) + '...');
+        status('peer reachable: ' + msg.from.slice(0, 16) + '...');
       }
 
-      if (msg.type === 'offer' && msg.from === peerNpub) {
+      if (msg.type === 'offer' && allowedPeers.has(msg.from)) {
         const p = ensurePeer();
         await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
         const answer = await p.createAnswer();
@@ -219,13 +266,13 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
         status('answer sent');
       }
 
-      if (msg.type === 'answer' && msg.from === peerNpub) {
+      if (msg.type === 'answer' && allowedPeers.has(msg.from)) {
         const p = ensurePeer();
         await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
         status('call established');
       }
 
-      if (msg.type === 'ice' && msg.from === peerNpub && msg.candidate) {
+      if (msg.type === 'ice' && allowedPeers.has(msg.from) && msg.candidate) {
         const p = ensurePeer();
         try { await p.addIceCandidate(msg.candidate); } catch (_) {}
       }

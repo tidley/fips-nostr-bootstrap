@@ -161,9 +161,9 @@ node apps/fips-video-chat.mjs --port 8088
 Open the page on both devices (same server URL). Each browser tab now generates an **ephemeral npub** and displays a QR code.
 
 Flow:
-1. User A opens page and shares/scans their npub QR.
-2. User B uses **Scan QR** (or paste) to fill A's npub, then clicks **Connect**.
-3. User A also scans/pastes B's npub and clicks **Connect** (both sides connect each other).
+1. Receiver opens page and clicks **Connect** with empty peer field (wait mode).
+2. Initiator scans/pastes receiver npub, then clicks **Connect**.
+3. Receiver sees an incoming request and clicks **Accept**.
 4. Wait for status `peer reachable...`.
 5. Click **Start camera+mic** on both.
 6. One side clicks **Call**.
