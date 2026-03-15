@@ -85,6 +85,11 @@ const html = `<!doctype html>
     <section id="preCall" class="precall">
       <div class="card">
         <div class="muted">Peer identity (initiator)</div>
+      <div class="row" style="margin-top:6px">
+        <button id="useNsec">Use nsec</button>
+        <button id="clearNsec">Use ephemeral</button>
+        <span id="idMode" class="muted"></span>
+      </div>
         <div class="row" style="margin-top:6px">
           <input id="peerNpub" placeholder="Paste peer npub" />
         </div>
@@ -167,6 +172,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const remoteVideo = document.getElementById('remoteVideo');
   const myNpubEl = document.getElementById('myNpub');
   const infoNpubEl = document.getElementById('infoNpub');
+  const idModeEl = document.getElementById('idMode');
   const qrEl = document.getElementById('qr');
 
   const scanWrap = document.getElementById('scanWrap');
@@ -182,13 +188,35 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const infoModal = document.getElementById('infoModal');
 
-  const sk = generateSecretKey();
-  const pub = getPublicKey(sk);
-  const myNpub = nip19.npubEncode(pub);
+  const resolveIdentity = () => {
+    const saved = sessionStorage.getItem('fips_video_nsec');
+    if (saved) {
+      try {
+        const dec = nip19.decode(saved);
+        if (dec.type === 'nsec') {
+          const sk = dec.data;
+          const pub = getPublicKey(sk);
+          return { sk, pub, npub: nip19.npubEncode(pub), mode: 'nsec' };
+        }
+      } catch {
+        sessionStorage.removeItem('fips_video_nsec');
+      }
+    }
+
+    const sk = generateSecretKey();
+    const pub = getPublicKey(sk);
+    return { sk, pub, npub: nip19.npubEncode(pub), mode: 'ephemeral' };
+  };
+
+  const ident = resolveIdentity();
+  const sk = ident.sk;
+  const pub = ident.pub;
+  const myNpub = ident.npub;
   const pool = new SimplePool();
 
   myNpubEl.textContent = myNpub;
   infoNpubEl.textContent = myNpub;
+  idModeEl.textContent = ident.mode === 'nsec' ? 'Identity: nsec' : 'Identity: ephemeral';
   QRCode.toDataURL(myNpub, { width: 240, margin: 1 }).then((url) => (qrEl.src = url));
 
   let localStream = null;
@@ -664,6 +692,24 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   document.getElementById('openInfo').onclick = () => infoModal.showModal();
   document.getElementById('closeInfo').onclick = () => infoModal.close();
   document.getElementById('copyNpub').onclick = async () => navigator.clipboard.writeText(myNpub);
+
+  document.getElementById('useNsec').onclick = () => {
+    const nsec = prompt('Paste nsec (kept in sessionStorage for this browser session):');
+    if (!nsec) return;
+    try {
+      const dec = nip19.decode(nsec.trim());
+      if (dec.type !== 'nsec') throw new Error('not an nsec');
+      sessionStorage.setItem('fips_video_nsec', nsec.trim());
+      location.reload();
+    } catch (e) {
+      setState('failed', 'Invalid nsec');
+    }
+  };
+
+  document.getElementById('clearNsec').onclick = () => {
+    sessionStorage.removeItem('fips_video_nsec');
+    location.reload();
+  };
 
   document.getElementById('scan').onclick = () => {
     if (scanStream) stopQrScan(); else startQrScan().catch(() => setState('failed', 'QR scan failed'));

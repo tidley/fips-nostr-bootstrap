@@ -172,6 +172,11 @@ Flow:
 Notes:
 - No auto-join on incoming offer; receiver must click **Join call**.
 
+Identity notes:
+- Default is ephemeral npub per browser tab.
+- You can optionally switch to a user-provided `nsec` via the UI (`Use nsec`).
+- `nsec` is stored in sessionStorage for that browser session.
+
 QR notes:
 - QR image is generated client-side.
 - Scanning uses native `BarcodeDetector` when available.
