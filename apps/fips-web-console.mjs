@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';

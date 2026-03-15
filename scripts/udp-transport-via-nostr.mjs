@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import dgram from 'node:dgram';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';

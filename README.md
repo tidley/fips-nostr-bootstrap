@@ -27,10 +27,15 @@ Known caveats:
 
 ## Fast demo (2 machines)
 
-Use same relay list on both sides (example):
+Use same relay list on both sides (example), now auto-loaded from `.env` if present.
+
+Create `.env` in repo root:
 
 ```bash
-export NOSTR_RELAYS="wss://nos.lol"
+NOSTR_NSEC=nsec1...
+NOSTR_RELAYS=wss://nos.lol
+# optional
+# FIPS_UDP_PUBLIC_HOST=...
 ```
 
 ### 1) Start server (machine A)

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import process from 'node:process';
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 
