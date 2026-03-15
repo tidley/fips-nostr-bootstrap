@@ -304,6 +304,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             return;
           }
 
+          if (msg.type === 'call_end') {
+            endCall(false);
+            status('peer ended call');
+            return;
+          }
+
           if (msg.type === 'ice' && msg.candidate) {
             const p = ensurePeer();
             try { await p.addIceCandidate(msg.candidate); } catch (_) {}
@@ -438,6 +444,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   async function startCall() {
     if (!peerPubkey) return status('no accepted peer');
     if (!peerReachable) return status('peer not accepted yet');
+    if (pc && (pc.connectionState === 'closed' || pc.signalingState === 'closed')) pc = null;
     const p = ensurePeer();
     callStartedAt = Date.now();
 
@@ -461,12 +468,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     document.getElementById('toggleCall').classList.add('danger');
   }
 
-  function endCall() {
+  function endCall(notifyPeer = true) {
+    if (notifyPeer && peerPubkey) {
+      sendNip17(peerPubkey, { type: 'call_end', ts: Date.now() });
+    }
+
     if (pc) {
       pc.getSenders().forEach((s) => { try { pc.removeTrack(s); } catch {} });
       pc.close();
       pc = null;
     }
+    pendingRemoteOffer = null;
     remoteVideo.srcObject = null;
     selectedPathReason = 'n/a';
     localCandidates.length = 0;

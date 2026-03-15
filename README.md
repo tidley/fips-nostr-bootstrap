@@ -179,7 +179,7 @@ QR notes:
 Notes:
 - Video signaling now uses NIP-17 DMs over relays (no local ws signaling path).
 - Uses WebRTC + public STUN for media path traversal.
-- Includes mic mute/unmute, speaker mute/unmute, and End call.
+- Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
 - FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
 - Local preview is smaller; remote video is larger.
