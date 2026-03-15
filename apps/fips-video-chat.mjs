@@ -69,7 +69,7 @@ const html = `<!doctype html>
   <p id="status">Status: idle</p>
 
   <div class="panel">
-    <strong>Geek stats</strong>
+    <strong>Stats</strong>
     <div id="stats">collecting...</div>
   </div>
 
@@ -211,7 +211,7 @@ import jsQR from 'https://esm.sh/jsqr@1.4.0';
       'audioOutPackets: ' + (audioOut?.packetsSent ?? 'n/a'),
       'audioInPackets: ' + (audioIn?.packetsReceived ?? 'n/a'),
       'audioInLost: ' + (audioIn?.packetsLost ?? 'n/a'),
-    ].join('\n');
+    ].join('\\n');
   }
 
   function startStatsLoop() {
