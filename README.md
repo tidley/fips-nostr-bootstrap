@@ -59,9 +59,12 @@ Server prints its generated/loaded `npub` (copy this to client).
 On **client machine**:
 ```bash
 node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 500 --payload 256 --warmup 30 --timeout 3000 --debug
+
+# Optional hole-punch tuning
+# --retry-ms 5000 --punch-interval-ms 300 --punch-duration-ms 30000 --punch-start-delay-ms 3000
 ```
 
-The client discovers endpoint info through encrypted Nostr DM handshake, then runs UDP latency/speed benchmark.
+The client discovers endpoint info through encrypted Nostr DM handshake, performs simultaneous UDP hole punching, then runs UDP latency/speed benchmark.
 
 (Implementation detail: NIP-17 gift-wrap events use randomized `created_at`, so subscriptions intentionally use a wider `since` window.)
 

@@ -20,7 +20,7 @@ async function ensureWebSocketSupport() {
 function parseArgs() {
   const args = process.argv.slice(2);
   const out = {
-    mode: 'client', // server | client
+    mode: 'client',
     npub: '',
     port: 9999,
     host: '0.0.0.0',
@@ -31,6 +31,10 @@ function parseArgs() {
     waitMs: 30000,
     showEndpoints: false,
     debug: false,
+    retryMs: 5000,
+    punchIntervalMs: 300,
+    punchDurationMs: 30000,
+    punchStartDelayMs: 3000,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -44,6 +48,10 @@ function parseArgs() {
     if (a === '--warmup' && Number.isFinite(Number(v))) out.warmup = Number(v);
     if (a === '--timeout' && Number.isFinite(Number(v))) out.timeoutMs = Number(v);
     if (a === '--wait' && Number.isFinite(Number(v))) out.waitMs = Number(v);
+    if (a === '--retry-ms' && Number.isFinite(Number(v))) out.retryMs = Number(v);
+    if (a === '--punch-interval-ms' && Number.isFinite(Number(v))) out.punchIntervalMs = Number(v);
+    if (a === '--punch-duration-ms' && Number.isFinite(Number(v))) out.punchDurationMs = Number(v);
+    if (a === '--punch-start-delay-ms' && Number.isFinite(Number(v))) out.punchStartDelayMs = Number(v);
     if (a === '--show-endpoints') out.showEndpoints = true;
     if (a === '--debug') out.debug = true;
   }
@@ -52,9 +60,7 @@ function parseArgs() {
 
 function resolveSecretKey() {
   const nsec = process.env.NOSTR_NSEC;
-  if (!nsec) {
-    return { sk: generateSecretKey(), source: 'generated-ephemeral' };
-  }
+  if (!nsec) return { sk: generateSecretKey(), source: 'generated-ephemeral' };
   const decoded = nip19.decode(nsec);
   if (decoded.type !== 'nsec') throw new Error('NOSTR_NSEC must be valid nsec');
   return { sk: decoded.data, source: 'env-nsec' };
@@ -113,22 +119,41 @@ function publishDM({ pool, relays, sk, recipientPubkey, obj, debugLog }) {
   const event = wrapEvent(sk, { publicKey: recipientPubkey }, JSON.stringify(obj));
   debugLog?.('publish', { kind: event.kind, to: recipientPubkey, type: obj?.type, id: event.id });
   const pubs = pool.publish(relays, event);
-  Promise.allSettled(pubs)
-    .then((results) => {
-      const summary = results.map((r) => (r.status === 'fulfilled' ? 'ok' : String(r.reason))).slice(0, 8);
-      debugLog?.('publish-result', { type: obj?.type, results: summary });
-    })
-    .catch(() => {
-      // swallow relay write errors; rendezvous retries handle transient failures
-    });
+  Promise.allSettled(pubs).then((results) => {
+    const summary = results.map((r) => (r.status === 'fulfilled' ? 'ok' : String(r.reason))).slice(0, 8);
+    debugLog?.('publish-result', { type: obj?.type, results: summary });
+  });
 }
 
 function parseIncomingNip17(event, recipientSk) {
   const rumor = unwrapEvent(event, recipientSk);
-  return {
-    senderPubkey: rumor.pubkey,
-    message: JSON.parse(rumor.content),
-  };
+  return { senderPubkey: rumor.pubkey, message: JSON.parse(rumor.content) };
+}
+
+function makeProbePacket(nonceValue, seq) {
+  return Buffer.from(JSON.stringify({ t: 'PROBE', n: nonceValue, s: seq }));
+}
+function makeProbeAckPacket(nonceValue) {
+  return Buffer.from(JSON.stringify({ t: 'PROBE_ACK', n: nonceValue }));
+}
+function parseJsonPacket(buf) {
+  try {
+    return JSON.parse(buf.toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function startPunching({ socket, remote, punchNonce, startAtMs, intervalMs, durationMs, debugLog }) {
+  let seq = 0;
+  const beginIn = Math.max(0, startAtMs - Date.now());
+  debugLog?.('punch-schedule', { remote, startAtMs, beginIn, intervalMs, durationMs });
+  setTimeout(() => {
+    const timer = setInterval(() => {
+      socket.send(makeProbePacket(punchNonce, seq++), remote.port, remote.host);
+    }, intervalMs);
+    setTimeout(() => clearInterval(timer), durationMs);
+  }, beginIn);
 }
 
 async function runServer(cfg) {
@@ -142,38 +167,84 @@ async function runServer(cfg) {
   await bindSocket(socket, cfg.host, cfg.port);
   const addr = socket.address();
   const advertiseHost = publicHostHint();
+  const activePunch = new Map();
 
   let pings = 0;
   socket.on('message', (msg, rinfo) => {
-    if (msg.subarray(0, 4).toString() !== 'PING') return;
-    pings += 1;
-    const pong = Buffer.concat([Buffer.from('PONG'), msg.subarray(4)]);
-    socket.send(pong, rinfo.port, rinfo.address);
+    const txt = msg.subarray(0, 4).toString();
+    if (txt === 'PING') {
+      pings += 1;
+      const pong = Buffer.concat([Buffer.from('PONG'), msg.subarray(4)]);
+      socket.send(pong, rinfo.port, rinfo.address);
+      return;
+    }
+
+    const pkt = parseJsonPacket(msg);
+    if (!pkt?.t || !pkt?.n) return;
+
+    if (pkt.t === 'PROBE') {
+      debugLog?.('punch-probe-recv', { from: `${rinfo.address}:${rinfo.port}`, nonce: pkt.n, seq: pkt.s });
+      socket.send(makeProbeAckPacket(pkt.n), rinfo.port, rinfo.address);
+      const st = activePunch.get(pkt.n) || {};
+      st.established = true;
+      st.remote = { host: rinfo.address, port: rinfo.port };
+      activePunch.set(pkt.n, st);
+      return;
+    }
+
+    if (pkt.t === 'PROBE_ACK') {
+      debugLog?.('punch-ack-recv', { from: `${rinfo.address}:${rinfo.port}`, nonce: pkt.n });
+      const st = activePunch.get(pkt.n) || {};
+      st.established = true;
+      st.remote = { host: rinfo.address, port: rinfo.port };
+      activePunch.set(pkt.n, st);
+    }
   });
 
-  const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 }, {
-    onevent: async (evt) => {
-      debugLog?.('recv-event', { id: evt.id, kind: evt.kind, pubkey: evt.pubkey });
-      try {
-        const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
-        debugLog?.('recv-msg', { fromPubkey, type: msg?.type, nonce: msg?.nonce });
-        if (msg?.type !== 'fips.udp.test.hello' || !msg?.nonce) return;
+  const sub = pool.subscribeMany(
+    relays,
+    { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
+    {
+      onevent: async (evt) => {
+        debugLog?.('recv-event', { id: evt.id, kind: evt.kind, pubkey: evt.pubkey });
+        try {
+          const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
+          debugLog?.('recv-msg', { fromPubkey, type: msg?.type, nonce: msg?.nonce });
+          if (msg?.type !== 'fips.udp.test.hello' || !msg?.nonce || !msg?.clientEndpoint) return;
 
-        const reply = {
-          type: 'fips.udp.test.server-info',
-          nonce: msg.nonce,
-          endpoint: { host: advertiseHost, port: addr.port },
-          issuedAt: Date.now(),
-        };
+          const startAtMs = Date.now() + cfg.punchStartDelayMs;
+          activePunch.set(msg.nonce, { established: false, remote: msg.clientEndpoint });
+          startPunching({
+            socket,
+            remote: msg.clientEndpoint,
+            punchNonce: msg.nonce,
+            startAtMs,
+            intervalMs: cfg.punchIntervalMs,
+            durationMs: cfg.punchDurationMs,
+            debugLog,
+          });
 
-        publishDM({ pool, relays, sk, recipientPubkey: fromPubkey, obj: reply, debugLog });
-      } catch (err) {
-        debugLog?.('recv-parse-failed', { err: String(err?.message || err) });
-      }
+          const reply = {
+            type: 'fips.udp.test.server-info',
+            nonce: msg.nonce,
+            endpoint: { host: advertiseHost, port: addr.port },
+            punch: {
+              startAtMs,
+              intervalMs: cfg.punchIntervalMs,
+              durationMs: cfg.punchDurationMs,
+            },
+            issuedAt: Date.now(),
+          };
+
+          publishDM({ pool, relays, sk, recipientPubkey: fromPubkey, obj: reply, debugLog });
+        } catch (err) {
+          debugLog?.('recv-parse-failed', { err: String(err?.message || err) });
+        }
+      },
+      oneose: () => debugLog?.('eose'),
+      onclose: (reasons) => debugLog?.('sub-close', { reasons }),
     },
-    oneose: () => debugLog?.('eose'),
-    onclose: (reasons) => debugLog?.('sub-close', { reasons }),
-  });
+  );
 
   console.log(
     JSON.stringify(
@@ -212,6 +283,32 @@ async function runClient(cfg) {
   const pool = createPoolWithAuth(sk, debugLog);
   const senderPubkey = getPublicKey(sk);
 
+  const socket = dgram.createSocket('udp4');
+  await bindSocket(socket, '0.0.0.0', 0);
+  const localAddr = socket.address();
+  const clientCandidate = { host: publicHostHint(), port: localAddr.port };
+
+  const punchState = { established: false, remote: null, nonce: null };
+  socket.on('message', (msg, rinfo) => {
+    const txt = msg.subarray(0, 4).toString();
+    if (txt === 'PONG') return;
+    const pkt = parseJsonPacket(msg);
+    if (!pkt?.t || !pkt?.n) return;
+    if (pkt.t === 'PROBE') {
+      debugLog?.('punch-probe-recv', { from: `${rinfo.address}:${rinfo.port}`, nonce: pkt.n, seq: pkt.s });
+      socket.send(makeProbeAckPacket(pkt.n), rinfo.port, rinfo.address);
+      punchState.established = true;
+      punchState.remote = { host: rinfo.address, port: rinfo.port };
+      punchState.nonce = pkt.n;
+    }
+    if (pkt.t === 'PROBE_ACK') {
+      debugLog?.('punch-ack-recv', { from: `${rinfo.address}:${rinfo.port}`, nonce: pkt.n });
+      punchState.established = true;
+      punchState.remote = { host: rinfo.address, port: rinfo.port };
+      punchState.nonce = pkt.n;
+    }
+  });
+
   const helloNonce = nonce();
 
   const serverInfo = await new Promise(async (resolve, reject) => {
@@ -239,11 +336,15 @@ async function runClient(cfg) {
       onclose: (reasons) => debugLog?.('sub-close', { reasons }),
     });
 
-    const hello = { type: 'fips.udp.test.hello', nonce: helloNonce, want: 'udp-endpoint' };
+    const hello = {
+      type: 'fips.udp.test.hello',
+      nonce: helloNonce,
+      want: 'udp-endpoint',
+      clientEndpoint: clientCandidate,
+    };
     publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello, debugLog });
 
-    const republishEveryMs = 7000;
-    let nextRepublishAt = Date.now() + republishEveryMs;
+    let nextRepublishAt = Date.now() + cfg.retryMs;
     timer = setInterval(() => {
       const now = Date.now();
       if (now - started > cfg.waitMs) {
@@ -252,20 +353,30 @@ async function runClient(cfg) {
         reject(new Error('timed out waiting for server-info DM'));
         return;
       }
-
       if (now >= nextRepublishAt) {
         publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello, debugLog });
-        nextRepublishAt = now + republishEveryMs;
+        nextRepublishAt = now + cfg.retryMs;
       }
     }, 250);
   });
 
-  const targetHost = serverInfo.endpoint.host;
-  const targetPort = serverInfo.endpoint.port;
+  startPunching({
+    socket,
+    remote: serverInfo.endpoint,
+    punchNonce: helloNonce,
+    startAtMs: serverInfo.punch?.startAtMs || Date.now(),
+    intervalMs: serverInfo.punch?.intervalMs || cfg.punchIntervalMs,
+    durationMs: serverInfo.punch?.durationMs || cfg.punchDurationMs,
+    debugLog,
+  });
 
-  const socket = dgram.createSocket('udp4');
-  await bindSocket(socket, '0.0.0.0', 0);
-  const localAddr = socket.address();
+  const punchWaitStart = Date.now();
+  while (!punchState.established && Date.now() - punchWaitStart < (serverInfo.punch?.durationMs || cfg.punchDurationMs) + 5000) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const target = punchState.remote || serverInfo.endpoint;
+  if (!punchState.established) debugLog?.('punch-not-established', { fallbackTarget: target });
 
   const payload = Buffer.alloc(Math.max(1, cfg.payloadBytes), 0x61);
   const rtts = [];
@@ -294,7 +405,7 @@ async function runClient(cfg) {
       }
 
       socket.on('message', onMessage);
-      socket.send(packet, targetPort, targetHost);
+      socket.send(packet, target.port, target.host);
     });
   }
 
@@ -303,7 +414,6 @@ async function runClient(cfg) {
   const setupMs = performance.now() - setupStart;
 
   for (let i = 0; i < cfg.warmup; i++) await pingOnce();
-
   const benchStart = performance.now();
   for (let i = 0; i < cfg.rounds; i++) rtts.push(await pingOnce());
   const benchMs = performance.now() - benchStart;
@@ -320,18 +430,15 @@ async function runClient(cfg) {
         mode: 'client',
         identity: nip19.npubEncode(senderPubkey),
         keySource,
-        rendezvous: {
-          viaNostrDM: true,
-          serverNpub: cfg.npub,
-          endpointDiscovered: true,
+        rendezvous: { viaNostrDM: true, serverNpub: cfg.npub, endpointDiscovered: true },
+        punching: {
+          established: punchState.established,
+          selectedRemote: cfg.showEndpoints ? target : '[hidden]',
         },
         endpoints: cfg.showEndpoints
-          ? { local: `${localAddr.address}:${localAddr.port}`, remote: `${targetHost}:${targetPort}` }
+          ? { local: `${localAddr.address}:${localAddr.port}`, remote: `${target.host}:${target.port}` }
           : { local: '[hidden]', remote: '[hidden-discovered-via-dm]' },
-        setup: {
-          firstProbeRttMs: Number(firstRtt.toFixed(3)),
-          setupTimeMs: Number(setupMs.toFixed(3)),
-        },
+        setup: { firstProbeRttMs: Number(firstRtt.toFixed(3)), setupTimeMs: Number(setupMs.toFixed(3)) },
         latency: {
           avgRttMs: Number(mean(rtts).toFixed(3)),
           p50RttMs: Number(percentile(rtts, 50).toFixed(3)),
