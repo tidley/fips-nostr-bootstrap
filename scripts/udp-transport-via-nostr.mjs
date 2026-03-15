@@ -127,7 +127,7 @@ async function runServer(cfg) {
     socket.send(pong, rinfo.port, rinfo.address);
   });
 
-  const sub = pool.subscribeMany(relays, [{ kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }], {
+  const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
     onevent: async (evt) => {
       try {
         const msg = await decryptDM(sk, evt.pubkey, evt.content);
@@ -191,7 +191,7 @@ async function runClient(cfg) {
 
   const serverInfo = await new Promise((resolve, reject) => {
     const started = Date.now();
-    const sub = pool.subscribeMany(relays, [{ kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }], {
+    const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
       onevent: async (evt) => {
         if (evt.pubkey !== serverPubkey) return;
         try {
