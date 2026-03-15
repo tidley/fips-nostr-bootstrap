@@ -158,27 +158,26 @@ A lightweight browser-to-browser video call demo is included:
 node apps/fips-video-chat.mjs --port 8088
 ```
 
-Open the page on both devices (same server URL). Each browser tab now generates an **ephemeral npub** and displays a QR code.
+Open the page on both devices (same URL). Each browser tab creates an **ephemeral npub**, listens on relays for NIP-17 messages, and shows a QR.
 
 Flow:
-1. Receiver opens page and clicks **Connect** with empty peer field (wait mode).
-2. Initiator scans/pastes receiver npub, then clicks **Connect**.
-3. Receiver sees an incoming request and clicks **Accept**.
-4. Wait for status `peer reachable...`.
-5. Click **Start camera+mic** on both.
-6. One side clicks **Call**.
+1. Receiver opens page and waits (already listening).
+2. Initiator scans/pastes receiver npub and clicks **Send Request**.
+3. Receiver sees incoming request and clicks **Accept**.
+4. Click **Start camera+mic** on both.
+5. One side clicks **Call**.
 
 QR notes:
-- QR image is now generated client-side (no external QR image API).
+- QR image is generated client-side.
 - Scanning uses native `BarcodeDetector` when available.
-- Falls back to in-browser `jsQR` decoding for broader browser/device support.
+- Falls back to in-browser `jsQR` for broader support.
 
 Notes:
-- No whitelist in this video demo; it is direct peer npub signaling.
-- Uses WebRTC with a public STUN server for basic NAT traversal.
-- Includes mic mute/unmute and speaker mute/unmute buttons.
-- Dark-mode UI with geek stats: RTT, bytes sent/received, instant throughput, selected ICE candidates, IPv6 hints, audio packet counters.
-- It is intentionally simple (1:1 peer signaling, no auth hardening, no recording).
+- Video signaling now uses NIP-17 DMs over relays (no local ws signaling path).
+- Uses WebRTC + public STUN for media path traversal.
+- Includes mic mute/unmute and speaker mute/unmute.
+- Dark UI with stats: RTT, bytes, throughput, ICE candidates, IPv6 hints.
+- Prototype quality: no auth hardening/recording yet.
 
 ## SSH-like demos
 

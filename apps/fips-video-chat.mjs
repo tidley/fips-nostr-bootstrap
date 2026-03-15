@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import http from 'node:http';
-import { WebSocketServer } from 'ws';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -9,6 +8,7 @@ function arg(name, fallback = '') {
 }
 
 const port = Number(arg('--port', '8088'));
+const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
 
 const html = `<!doctype html>
 <html>
@@ -47,15 +47,15 @@ const html = `<!doctype html>
   </div>
 
   <div class="row">
-    <input id="peerNpub" placeholder="Peer npub (initiator fills this)" />
+    <input id="peerNpub" placeholder="Peer npub (initiator only)" />
     <button id="scan">Scan QR</button>
-    <button id="connect">Connect</button>
+    <button id="request">Send Request</button>
   </div>
   <div class="row" id="scanWrap" style="display:none">
     <video id="scanVideo" autoplay playsinline style="max-width:320px;border:1px solid #ccc;border-radius:8px"></video>
   </div>
-  <div id="incomingWrap" style="margin:8px 0;padding:8px;border:1px solid #ddd;border-radius:8px;display:none">
-    <strong>Incoming connection requests</strong>
+  <div id="incomingWrap" class="panel" style="display:none">
+    <strong>Incoming requests</strong>
     <div id="incomingList"></div>
   </div>
 
@@ -79,11 +79,15 @@ const html = `<!doctype html>
   </div>
 
 <script type="module">
-import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-tools@2.17.0';
+import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-tools@2.17.0';
+import { wrapEvent, unwrapEvent } from 'https://esm.sh/nostr-tools@2.17.0/nip17';
 import jsQR from 'https://esm.sh/jsqr@1.4.0';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
 (() => {
+  const RELAYS = ${JSON.stringify(relayList)};
+  const APP = 'fips.video.v1';
+
   const statusEl = document.getElementById('status');
   const peerNpubEl = document.getElementById('peerNpub');
   const localVideo = document.getElementById('localVideo');
@@ -99,16 +103,15 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const sk = generateSecretKey();
   const pub = getPublicKey(sk);
   const myNpub = nip19.npubEncode(pub);
+  const pool = new SimplePool();
 
   myNpubEl.textContent = myNpub;
-  QRCode.toDataURL(myNpub, { width: 170, margin: 1 })
-    .then((url) => { qrEl.src = url; })
-    .catch(() => { qrEl.alt = 'QR failed to render'; });
+  QRCode.toDataURL(myNpub, { width: 170, margin: 1 }).then((url) => (qrEl.src = url));
 
-  let ws = null;
   let localStream = null;
   let pc = null;
   let peerNpub = null;
+  let peerPubkey = null;
   let peerReachable = false;
   let micMuted = false;
   let speakerMuted = false;
@@ -121,40 +124,111 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   function status(s) { statusEl.textContent = 'Status: ' + s; }
 
+  function npubToPubkey(npub) {
+    const d = nip19.decode(npub);
+    if (d.type !== 'npub') throw new Error('invalid npub');
+    return d.data;
+  }
+
+  function sendNip17(toPubkey, body) {
+    const event = wrapEvent(sk, { publicKey: toPubkey }, JSON.stringify({ app: APP, ...body }));
+    Promise.allSettled(pool.publish(RELAYS, event)).catch(() => undefined);
+  }
+
   function renderIncoming() {
-    const entries = Array.from(pendingRequests.keys());
+    const entries = Array.from(pendingRequests.entries());
     incomingWrap.style.display = entries.length ? 'block' : 'none';
     incomingList.innerHTML = '';
-    for (const from of entries) {
+
+    for (const [fromNpub, meta] of entries) {
       const row = document.createElement('div');
-      row.style.marginTop = '6px';
-      row.innerHTML = '<code style="font-size:12px">' + from + '</code> <button data-from="' + from + '">Accept</button>';
+      row.style.marginTop = '8px';
+      row.innerHTML = '<code style="font-size:12px">' + fromNpub + '</code> <button data-from="' + fromNpub + '">Accept</button>';
       incomingList.appendChild(row);
     }
+
     incomingList.querySelectorAll('button[data-from]').forEach((btn) => {
       btn.onclick = () => {
-        const from = btn.getAttribute('data-from');
-        pendingRequests.delete(from);
+        const fromNpub = btn.getAttribute('data-from');
+        const req = pendingRequests.get(fromNpub);
+        if (!req) return;
+        pendingRequests.delete(fromNpub);
         renderIncoming();
-        allowedPeers.add(from);
-        peerNpub = from;
-        peerNpubEl.value = from;
-        send({ type: 'probe_ack', to: from });
+
+        peerNpub = fromNpub;
+        peerPubkey = req.fromPubkey;
+        peerNpubEl.value = fromNpub;
+        allowedPeers.add(peerPubkey);
         peerReachable = true;
-        status('accepted peer ' + from.slice(0, 16) + '...');
+
+        sendNip17(peerPubkey, { type: 'request_accept', ts: Date.now() });
+        status('accepted request from ' + fromNpub.slice(0, 16) + '...');
       };
     });
   }
 
-  function send(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  function startListening() {
+    pool.subscribeMany(RELAYS, { kinds: [1059], '#p': [pub], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 }, {
+      onevent: async (evt) => {
+        try {
+          const rumor = unwrapEvent(evt, sk);
+          const msg = JSON.parse(rumor.content);
+          if (!msg || msg.app !== APP) return;
+
+          const fromPubkey = rumor.pubkey;
+          const fromNpub = nip19.npubEncode(fromPubkey);
+
+          if (msg.type === 'request_connect') {
+            pendingRequests.set(fromNpub, { fromPubkey, ts: msg.ts || Date.now() });
+            renderIncoming();
+            status('incoming request from ' + fromNpub.slice(0, 16) + '...');
+            return;
+          }
+
+          if (msg.type === 'request_accept') {
+            if (peerPubkey && fromPubkey !== peerPubkey) return;
+            peerPubkey = fromPubkey;
+            peerNpub = fromNpub;
+            allowedPeers.add(fromPubkey);
+            peerReachable = true;
+            status('peer accepted request: ' + fromNpub.slice(0, 16) + '...');
+            return;
+          }
+
+          if (!allowedPeers.has(fromPubkey)) return;
+
+          if (msg.type === 'offer') {
+            const p = ensurePeer();
+            await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            const answer = await p.createAnswer();
+            await p.setLocalDescription(answer);
+            sendNip17(fromPubkey, { type: 'answer', sdp: answer });
+            status('answer sent');
+            return;
+          }
+
+          if (msg.type === 'answer') {
+            const p = ensurePeer();
+            await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            status('call established');
+            return;
+          }
+
+          if (msg.type === 'ice' && msg.candidate) {
+            const p = ensurePeer();
+            try { await p.addIceCandidate(msg.candidate); } catch (_) {}
+          }
+        } catch {
+          // ignore malformed messages
+        }
+      },
+    });
+
+    status('listening on relays: ' + RELAYS.join(', '));
   }
 
   async function renderStats() {
-    if (!pc) {
-      statsEl.textContent = 'pc: not created';
-      return;
-    }
+    if (!pc) { statsEl.textContent = 'pc: not created'; return; }
 
     const stats = await pc.getStats();
     let selectedPair = null;
@@ -163,24 +237,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     let rttMs = null;
     let bytesSent = 0;
     let bytesReceived = 0;
-    let audioOut = null;
-    let audioIn = null;
 
     stats.forEach((r) => {
-      if (r.type === 'transport' && r.selectedCandidatePairId) {
-        selectedPair = stats.get(r.selectedCandidatePairId);
-      }
-      if (r.type === 'candidate-pair' && r.state === 'succeeded' && !selectedPair) {
-        selectedPair = r;
-      }
-      if (r.type === 'outbound-rtp' && !r.isRemote) {
-        bytesSent += r.bytesSent || 0;
-        if (r.kind === 'audio') audioOut = r;
-      }
-      if (r.type === 'inbound-rtp' && !r.isRemote) {
-        bytesReceived += r.bytesReceived || 0;
-        if (r.kind === 'audio') audioIn = r;
-      }
+      if (r.type === 'transport' && r.selectedCandidatePairId) selectedPair = stats.get(r.selectedCandidatePairId);
+      if (r.type === 'candidate-pair' && r.state === 'succeeded' && !selectedPair) selectedPair = r;
+      if (r.type === 'outbound-rtp' && !r.isRemote) bytesSent += r.bytesSent || 0;
+      if (r.type === 'inbound-rtp' && !r.isRemote) bytesReceived += r.bytesReceived || 0;
     });
 
     if (selectedPair) {
@@ -207,21 +269,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       'bytesReceived: ' + bytesReceived,
       'upMbps(now): ' + upMbps,
       'downMbps(now): ' + downMbps,
-      'localCandidate: ' + localIp + ' (' + (localCand?.candidateType || 'n/a') + ', ' + (localCand?.networkType || 'n/a') + ')',
-      'remoteCandidate: ' + remoteIp + ' (' + (remoteCand?.candidateType || 'n/a') + ')',
+      'localCandidate: ' + localIp,
+      'remoteCandidate: ' + remoteIp,
       'localIPv6? ' + String(localIp.includes(':')),
       'peerIPv6? ' + String(remoteIp.includes(':')),
-      'audioOutPackets: ' + (audioOut?.packetsSent ?? 'n/a'),
-      'audioInPackets: ' + (audioIn?.packetsReceived ?? 'n/a'),
-      'audioInLost: ' + (audioIn?.packetsLost ?? 'n/a'),
     ].join('\\n');
   }
 
   function startStatsLoop() {
     if (statsTimer) return;
-    statsTimer = setInterval(() => {
-      renderStats().catch(() => {});
-    }, 1000);
+    statsTimer = setInterval(() => renderStats().catch(() => {}), 1000);
   }
 
   function ensurePeer() {
@@ -230,7 +287,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     startStatsLoop();
 
     pc.onicecandidate = (e) => {
-      if (e.candidate && peerNpub) send({ type: 'ice', to: peerNpub, candidate: e.candidate });
+      if (e.candidate && peerPubkey) sendNip17(peerPubkey, { type: 'ice', candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
@@ -252,19 +309,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     });
     localVideo.srcObject = localStream;
     status('camera+mic started');
-    if (pc) {
-      for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
-    }
+    if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
   }
 
   async function startCall() {
-    if (!peerNpub) return status('enter peer npub first');
-    if (!peerReachable) return status('peer not confirmed yet; click Connect on both sides');
+    if (!peerPubkey) return status('no accepted peer');
+    if (!peerReachable) return status('peer not accepted yet');
     const p = ensurePeer();
     const offer = await p.createOffer();
     await p.setLocalDescription(offer);
-    send({ type: 'offer', to: peerNpub, sdp: offer });
-    status('offer sent to peer');
+    sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+    status('offer sent');
   }
 
   async function startQrScan() {
@@ -281,8 +336,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     scanTimer = setInterval(async () => {
       try {
         if (scanVideo.videoWidth < 20 || scanVideo.videoHeight < 20) return;
-
         let value = '';
+
         if (detector) {
           const codes = await detector.detect(scanVideo);
           if (codes?.length) value = (codes[0].rawValue || '').trim();
@@ -301,7 +356,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           status('QR scanned');
         }
       } catch {
-        // ignore transient detection errors
+        // ignore transient errors
       }
     }, 250);
   }
@@ -316,71 +371,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     scanWrap.style.display = 'none';
   }
 
-  function connectSignal() {
-    peerNpub = peerNpubEl.value.trim() || null;
-    if (peerNpub && !peerNpub.startsWith('npub')) return status('invalid peer npub');
-
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-
-    ws.onopen = () => {
-      send({ type: 'hello', npub: myNpub });
-      if (peerNpub) {
-        allowedPeers.add(peerNpub);
-        send({ type: 'probe', to: peerNpub });
-        status('signaling connected; probing peer...');
-      } else {
-        status('signaling connected; waiting for incoming request');
-      }
-    };
-
-    ws.onmessage = async (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (!msg) return;
-
-      if (msg.type === 'peer-online' && peerNpub && msg.npub === peerNpub) {
-        status('peer is online');
-      }
-
-      if (msg.type === 'probe') {
-        if (!allowedPeers.has(msg.from)) {
-          pendingRequests.set(msg.from, true);
-          renderIncoming();
-          status('incoming request from ' + msg.from.slice(0, 16) + '...');
-        } else {
-          send({ type: 'probe_ack', to: msg.from });
-        }
-      }
-
-      if (msg.type === 'probe_ack' && (!peerNpub || msg.from === peerNpub)) {
-        peerNpub = msg.from;
-        peerNpubEl.value = msg.from;
-        allowedPeers.add(msg.from);
-        peerReachable = true;
-        status('peer reachable: ' + msg.from.slice(0, 16) + '...');
-      }
-
-      if (msg.type === 'offer' && allowedPeers.has(msg.from)) {
-        const p = ensurePeer();
-        await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        const answer = await p.createAnswer();
-        await p.setLocalDescription(answer);
-        send({ type: 'answer', to: peerNpub, sdp: answer });
-        status('answer sent');
-      }
-
-      if (msg.type === 'answer' && allowedPeers.has(msg.from)) {
-        const p = ensurePeer();
-        await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        status('call established');
-      }
-
-      if (msg.type === 'ice' && allowedPeers.has(msg.from) && msg.candidate) {
-        const p = ensurePeer();
-        try { await p.addIceCandidate(msg.candidate); } catch (_) {}
-      }
-    };
-
-    ws.onclose = () => status('signaling disconnected');
+  function sendRequest() {
+    const npub = peerNpubEl.value.trim();
+    if (!npub.startsWith('npub')) return status('invalid peer npub');
+    peerNpub = npub;
+    try {
+      peerPubkey = npubToPubkey(npub);
+      sendNip17(peerPubkey, { type: 'request_connect', ts: Date.now() });
+      status('request sent to ' + npub.slice(0, 16) + '...');
+    } catch (e) {
+      status('npub decode error: ' + e.message);
+    }
   }
 
   document.getElementById('copyNpub').onclick = async () => {
@@ -390,12 +391,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   document.getElementById('scan').onclick = () => {
     if (scanStream) stopQrScan();
-    else startQrScan().catch(e => status('scan error: ' + e.message));
+    else startQrScan().catch((e) => status('scan error: ' + e.message));
   };
 
-  document.getElementById('connect').onclick = connectSignal;
-  document.getElementById('cam').onclick = () => startCamera().catch(e => status('camera error: ' + e.message));
-  document.getElementById('call').onclick = () => startCall().catch(e => status('call error: ' + e.message));
+  document.getElementById('request').onclick = sendRequest;
+  document.getElementById('cam').onclick = () => startCamera().catch((e) => status('camera error: ' + e.message));
+  document.getElementById('call').onclick = () => startCall().catch((e) => status('call error: ' + e.message));
   document.getElementById('mute').onclick = () => {
     if (!localStream) return;
     micMuted = !micMuted;
@@ -409,6 +410,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     document.getElementById('speaker').textContent = speakerMuted ? 'Unmute speaker' : 'Mute speaker';
     status(speakerMuted ? 'speaker muted' : 'speaker unmuted');
   };
+
+  startListening();
 })();
 </script>
 </body>
@@ -424,62 +427,6 @@ const server = http.createServer((req, res) => {
   res.end('not found');
 });
 
-const wss = new WebSocketServer({ server, path: '/ws' });
-const peers = new Map(); // npub -> ws
-const pendingByTarget = new Map(); // npub -> [message]
-
-function send(ws, obj) {
-  if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
-}
-
-wss.on('connection', (ws) => {
-  let myNpub = null;
-
-  ws.on('message', (raw) => {
-    try {
-      const msg = JSON.parse(String(raw));
-
-      if (msg.type === 'hello' && typeof msg.npub === 'string') {
-        myNpub = msg.npub;
-        peers.set(myNpub, ws);
-        for (const [npub, peerWs] of peers.entries()) {
-          if (npub !== myNpub) {
-            send(peerWs, { type: 'peer-online', npub: myNpub });
-            send(ws, { type: 'peer-online', npub });
-          }
-        }
-
-        const pending = pendingByTarget.get(myNpub);
-        if (pending?.length) {
-          for (const p of pending) send(ws, p);
-          pendingByTarget.delete(myNpub);
-        }
-        return;
-      }
-
-      if (!myNpub || !msg.to) return;
-      const forwarded = { ...msg, from: myNpub };
-      const toWs = peers.get(msg.to);
-
-      if (['offer', 'answer', 'ice', 'probe', 'probe_ack'].includes(msg.type)) {
-        if (toWs) {
-          send(toWs, forwarded);
-        } else if (msg.type === 'probe') {
-          const arr = pendingByTarget.get(msg.to) || [];
-          arr.push(forwarded);
-          pendingByTarget.set(msg.to, arr.slice(-20));
-        }
-      }
-    } catch {
-      // ignore malformed messages
-    }
-  });
-
-  ws.on('close', () => {
-    if (myNpub && peers.get(myNpub) === ws) peers.delete(myNpub);
-  });
-});
-
 server.listen(port, () => {
-  console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}` }, null, 2));
+  console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}`, relays: relayList }, null, 2));
 });
