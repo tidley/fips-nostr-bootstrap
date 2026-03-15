@@ -163,8 +163,10 @@ Open the page on both devices (same server URL). Each browser tab now generates 
 Flow:
 1. User A opens page and shares/scans their npub QR.
 2. User B pastes A's npub into peer field and clicks **Connect**.
-3. Click **Start camera+mic** on both.
-4. One side clicks **Call**.
+3. User A also pastes B's npub and clicks **Connect** (both sides must connect each other).
+4. Wait for status `peer reachable...`.
+5. Click **Start camera+mic** on both.
+6. One side clicks **Call**.
 
 Notes:
 - No whitelist in this video demo; it is direct peer npub signaling.

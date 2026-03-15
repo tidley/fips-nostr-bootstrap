@@ -83,6 +83,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   let localStream = null;
   let pc = null;
   let peerNpub = null;
+  let peerReachable = false;
   let micMuted = false;
   let speakerMuted = false;
 
@@ -126,6 +127,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
 
   async function startCall() {
     if (!peerNpub) return status('enter peer npub first');
+    if (!peerReachable) return status('peer not confirmed yet; click Connect on both sides');
     const p = ensurePeer();
     const offer = await p.createOffer();
     await p.setLocalDescription(offer);
@@ -141,7 +143,8 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
 
     ws.onopen = () => {
       send({ type: 'hello', npub: myNpub });
-      status('signaling connected as ' + myNpub.slice(0, 16) + '...');
+      send({ type: 'probe', to: peerNpub });
+      status('signaling connected as ' + myNpub.slice(0, 16) + '... (probing peer)');
     };
 
     ws.onmessage = async (ev) => {
@@ -150,6 +153,15 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
 
       if (msg.type === 'peer-online' && msg.npub === peerNpub) {
         status('peer is online');
+      }
+
+      if (msg.type === 'probe' && msg.from === peerNpub) {
+        send({ type: 'probe_ack', to: peerNpub });
+      }
+
+      if (msg.type === 'probe_ack' && msg.from === peerNpub) {
+        peerReachable = true;
+        status('peer reachable: ' + peerNpub.slice(0, 16) + '...');
       }
 
       if (msg.type === 'offer' && msg.from === peerNpub) {
@@ -242,7 +254,7 @@ wss.on('connection', (ws) => {
       const toWs = peers.get(msg.to);
       if (!toWs) return;
 
-      if (['offer', 'answer', 'ice'].includes(msg.type)) {
+      if (['offer', 'answer', 'ice', 'probe', 'probe_ack'].includes(msg.type)) {
         send(toWs, { ...msg, from: myNpub });
       }
     } catch {
