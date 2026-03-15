@@ -45,12 +45,16 @@ const html = `<!doctype html>
 
     .stage { flex:1; padding:10px 16px 6px; display:none; }
     .videoStage { position:relative; border-radius:22px; overflow:hidden; background:#111; min-height:56vh; border:1px solid #3c4043; }
-    #remoteVideo { width:100%; height:100%; object-fit:cover; background:#111; }
+    #remoteVideo { width:100%; height:100%; object-fit:contain; background:#111; }
+    .remote-landscape #remoteVideo { object-fit:contain; }
+    .remote-portrait #remoteVideo { object-fit:cover; }
     #localVideo { position:absolute; right:16px; top:16px; width:22%; min-width:160px; max-width:280px; border-radius:12px; border:1px solid #3c4043; background:#000; object-fit:cover; }
     .overlayStatus { position:absolute; left:14px; top:14px; padding:8px 10px; border-radius:12px; background:rgba(32,33,36,.72); font-size:12px; color:#d2d7dc; backdrop-filter: blur(6px); }
 
     .controls { position:sticky; bottom:10px; display:flex; justify-content:center; gap:10px; padding:12px; }
-    .ctrl { width:44px; height:44px; border-radius:50%; border:1px solid #3c4043; background:#2d2f31; color:#e8eaed; font-size:18px; display:flex; align-items:center; justify-content:center; }
+    .ctrl { width:44px; height:44px; border-radius:50%; border:1px solid #3c4043; background:#2d2f31; color:#e8eaed; display:flex; align-items:center; justify-content:center; }
+    .ctrl svg { width:20px; height:20px; stroke: currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .ctrl.off { color:#f28b82; border-color:#5b2a2a; }
     .ctrl.wide { width:auto; padding:0 16px; border-radius:999px; font-size:14px; }
 
     .debug { margin:8px 16px 16px; }
@@ -113,9 +117,15 @@ const html = `<!doctype html>
         <div id="overlayStatus" class="overlayStatus">Waiting for peer…</div>
       </div>
       <div class="controls">
-        <button id="toggleMic" class="ctrl" title="Mic">🎙️</button>
-        <button id="toggleCam" class="ctrl" title="Camera">📷</button>
-        <button id="toggleSpeaker" class="ctrl" title="Speaker">🔈</button>
+        <button id="toggleMic" class="ctrl" title="Mic" aria-label="Mic">
+          <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 1 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/><path d="M8 21h8"/></svg>
+        </button>
+        <button id="toggleCam" class="ctrl" title="Camera" aria-label="Camera">
+          <svg viewBox="0 0 24 24"><rect x="3" y="7" width="13" height="10" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+        </button>
+        <button id="toggleSpeaker" class="ctrl" title="Speaker" aria-label="Speaker">
+          <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 9.5a4.5 4.5 0 0 1 0 5"/><path d="M18.5 7a8 8 0 0 1 0 10"/></svg>
+        </button>
         <button id="joinEnd" class="ctrl wide primary">Join call</button>
       </div>
     </section>
@@ -396,6 +406,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     pc.ontrack = (e) => {
       remoteVideo.srcObject = e.streams[0];
+      const stage = document.querySelector('.videoStage');
+      const applyRatioClass = () => {
+        const vw = remoteVideo.videoWidth || 0;
+        const vh = remoteVideo.videoHeight || 0;
+        if (!vw || !vh || !stage) return;
+        stage.classList.remove('remote-landscape', 'remote-portrait');
+        if (vw >= vh) stage.classList.add('remote-landscape');
+        else stage.classList.add('remote-portrait');
+      };
+      remoteVideo.onloadedmetadata = applyRatioClass;
+      remoteVideo.onresize = applyRatioClass;
+      applyRatioClass();
       setState('connected', 'Remote media connected');
     };
 
@@ -614,7 +636,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     }
     camEnabled = !camEnabled;
     localStream.getVideoTracks().forEach((t) => (t.enabled = camEnabled));
-    camBtn.textContent = camEnabled ? '📷' : '🚫';
+    camBtn.classList.toggle('off', !camEnabled);
   };
 
   micBtn.onclick = async () => {
@@ -623,14 +645,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     }
     micMuted = !micMuted;
     localStream.getAudioTracks().forEach((t) => (t.enabled = !micMuted));
-    micBtn.textContent = micMuted ? '🔇' : '🎙️';
+    micBtn.classList.toggle('off', micMuted);
   };
 
   speakerBtn.onclick = () => {
     speakerMuted = !speakerMuted;
     remoteVideo.muted = speakerMuted;
-    speakerBtn.textContent = speakerMuted ? '🔈' : '🔊';
+    speakerBtn.classList.toggle('off', speakerMuted);
   };
+
+  micBtn.classList.toggle('off', micMuted);
+  camBtn.classList.toggle('off', !camEnabled);
+  speakerBtn.classList.toggle('off', speakerMuted);
 
   listen();
 })();
