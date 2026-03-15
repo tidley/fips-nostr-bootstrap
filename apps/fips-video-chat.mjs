@@ -65,7 +65,7 @@ const html = `<!doctype html>
   </div>
 
   <div class="row controls">
-    <button id="toggleCall" class="primary">Start call</button>
+    <button id="toggleCall" class="primary" style="display:none">Join call</button>
     <button id="toggleCam">Turn off camera</button>
     <button id="mute">Mute mic</button>
     <button id="speaker">Mute speaker</button>
@@ -122,6 +122,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let speakerMuted = false;
   let camEnabled = true;
   let callActive = false;
+  let pendingRemoteOffer = null;
   let scanStream = null;
   let scanTimer = null;
   let statsTimer = null;
@@ -231,6 +232,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         peerNpubEl.value = fromNpub;
         allowedPeers.add(peerPubkey);
         peerReachable = true;
+        const joinBtn = document.getElementById('toggleCall');
+        joinBtn.style.display = 'inline-block';
 
         sendNip17(peerPubkey, { type: 'request_accept', ts: Date.now() });
         status('accepted request from ' + fromNpub.slice(0, 16) + '...');
@@ -262,6 +265,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             peerNpub = fromNpub;
             allowedPeers.add(fromPubkey);
             peerReachable = true;
+            const joinBtn = document.getElementById('toggleCall');
+            joinBtn.style.display = 'inline-block';
             status('peer accepted request: ' + fromNpub.slice(0, 16) + '...');
             return;
           }
@@ -277,18 +282,13 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           }
 
           if (msg.type === 'offer') {
-            const p = ensurePeer();
-            callStartedAt = Date.now();
-            await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            const answer = await p.createAnswer();
-            await p.setLocalDescription(answer);
-            sendNip17(fromPubkey, { type: 'answer', sdp: answer });
-            callActive = true;
+            pendingRemoteOffer = { fromPubkey, sdp: msg.sdp };
             const b = document.getElementById('toggleCall');
-            b.textContent = 'End call';
-            b.classList.remove('primary');
-            b.classList.add('danger');
-            status('answer sent');
+            b.style.display = 'inline-block';
+            b.textContent = 'Join call';
+            b.classList.add('primary');
+            b.classList.remove('danger');
+            status('incoming call from ' + fromNpub.slice(0, 16) + '... click Join call');
             return;
           }
 
@@ -440,14 +440,25 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (!peerReachable) return status('peer not accepted yet');
     const p = ensurePeer();
     callStartedAt = Date.now();
-    const offer = await p.createOffer();
-    await p.setLocalDescription(offer);
-    sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+
+    if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
+      await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
+      const answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      sendNip17(peerPubkey, { type: 'answer', sdp: answer });
+      pendingRemoteOffer = null;
+      status('joined call (answer sent)');
+    } else {
+      const offer = await p.createOffer();
+      await p.setLocalDescription(offer);
+      sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+      status('offer sent');
+    }
+
     callActive = true;
     document.getElementById('toggleCall').textContent = 'End call';
     document.getElementById('toggleCall').classList.remove('primary');
     document.getElementById('toggleCall').classList.add('danger');
-    status('offer sent');
   }
 
   function endCall() {
@@ -464,7 +475,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     statsEl.textContent = 'call ended';
     callActive = false;
     const b = document.getElementById('toggleCall');
-    b.textContent = 'Start call';
+    b.textContent = 'Join call';
     b.classList.remove('danger');
     b.classList.add('primary');
     status('call ended');

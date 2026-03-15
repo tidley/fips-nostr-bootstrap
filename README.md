@@ -165,8 +165,11 @@ Flow:
 2. Initiator scans/pastes receiver npub and clicks **Send Request**.
 3. Receiver sees incoming request and clicks **Accept**.
 4. Camera+mic auto-start on page load (or browser permission prompt).
-5. One side clicks **Start call**.
+5. One side clicks **Join call**.
 6. Same button toggles to **End call** to tear down the peer connection.
+
+Notes:
+- No auto-join on incoming offer; receiver must click **Join call**.
 
 QR notes:
 - QR image is generated client-side.
