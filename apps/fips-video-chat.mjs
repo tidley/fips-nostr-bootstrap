@@ -17,20 +17,24 @@ const html = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>FIPS Simple Video Chat</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; }
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; background:#0f1216; color:#dbe2ea; }
     .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
-    input, button { padding: 8px; font-size: 14px; }
+    input, button { padding: 8px; font-size: 14px; background:#1b2129; color:#dbe2ea; border:1px solid #3a4655; border-radius:8px; }
     input { flex: 1; }
-    video { width: 48%; background: #111; border-radius: 8px; }
-    #status { color: #555; font-size: 13px; }
-    #myNpub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
-    #qr { width: 170px; height: 170px; border: 1px solid #ddd; border-radius: 8px; }
+    button { cursor:pointer; }
+    video { width: 48%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
+    #status { color: #9fb2c7; font-size: 13px; }
+    #myNpub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; color:#c5d7ea }
+    #qr { width: 170px; height: 170px; border: 1px solid #2f3946; border-radius: 8px; background:#fff; }
+    .panel { border:1px solid #2f3946; background:#141a22; border-radius:10px; padding:10px; margin-bottom:10px; }
+    #stats { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color:#9ed0ff; }
   </style>
 </head>
 <body>
-  <h2>Simple 1:1 Video Chat (ephemeral npub per tab)</h2>
+  <h2>Simple 1:1 Video Chat</h2>
 
-  <div class="row" style="align-items:flex-start">
+  <div class="panel row" style="align-items:flex-start">
     <div style="flex:1">
       <div><strong>Your ephemeral npub:</strong></div>
       <div id="myNpub"></div>
@@ -64,6 +68,11 @@ const html = `<!doctype html>
 
   <p id="status">Status: idle</p>
 
+  <div class="panel">
+    <strong>Geek stats</strong>
+    <div id="stats">collecting...</div>
+  </div>
+
   <div class="row">
     <video id="localVideo" autoplay playsinline muted></video>
     <video id="remoteVideo" autoplay playsinline></video>
@@ -83,6 +92,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   const scanVideo = document.getElementById('scanVideo');
   const incomingWrap = document.getElementById('incomingWrap');
   const incomingList = document.getElementById('incomingList');
+  const statsEl = document.getElementById('stats');
 
   const sk = generateSecretKey();
   const pub = getPublicKey(sk);
@@ -100,6 +110,8 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   let speakerMuted = false;
   let scanStream = null;
   let scanTimer = null;
+  let statsTimer = null;
+  let lastBytes = { sent: 0, recv: 0, ts: Date.now() };
   const pendingRequests = new Map();
   const allowedPeers = new Set();
 
@@ -134,9 +146,84 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   }
 
+  async function renderStats() {
+    if (!pc) {
+      statsEl.textContent = 'pc: not created';
+      return;
+    }
+
+    const stats = await pc.getStats();
+    let selectedPair = null;
+    let localCand = null;
+    let remoteCand = null;
+    let rttMs = null;
+    let bytesSent = 0;
+    let bytesReceived = 0;
+    let audioOut = null;
+    let audioIn = null;
+
+    stats.forEach((r) => {
+      if (r.type === 'transport' && r.selectedCandidatePairId) {
+        selectedPair = stats.get(r.selectedCandidatePairId);
+      }
+      if (r.type === 'candidate-pair' && r.state === 'succeeded' && !selectedPair) {
+        selectedPair = r;
+      }
+      if (r.type === 'outbound-rtp' && !r.isRemote) {
+        bytesSent += r.bytesSent || 0;
+        if (r.kind === 'audio') audioOut = r;
+      }
+      if (r.type === 'inbound-rtp' && !r.isRemote) {
+        bytesReceived += r.bytesReceived || 0;
+        if (r.kind === 'audio') audioIn = r;
+      }
+    });
+
+    if (selectedPair) {
+      localCand = stats.get(selectedPair.localCandidateId);
+      remoteCand = stats.get(selectedPair.remoteCandidateId);
+      if (typeof selectedPair.currentRoundTripTime === 'number') rttMs = Math.round(selectedPair.currentRoundTripTime * 1000);
+    }
+
+    const now = Date.now();
+    const dt = Math.max(1, (now - lastBytes.ts) / 1000);
+    const upMbps = (((bytesSent - lastBytes.sent) * 8) / dt / 1_000_000).toFixed(3);
+    const downMbps = (((bytesReceived - lastBytes.recv) * 8) / dt / 1_000_000).toFixed(3);
+    lastBytes = { sent: bytesSent, recv: bytesReceived, ts: now };
+
+    const localIp = localCand?.address || localCand?.ip || 'n/a';
+    const remoteIp = remoteCand?.address || remoteCand?.ip || 'n/a';
+
+    statsEl.textContent = [
+      'connectionState: ' + pc.connectionState,
+      'iceConnectionState: ' + pc.iceConnectionState,
+      'peerReachable: ' + peerReachable,
+      'rttMs: ' + (rttMs ?? 'n/a'),
+      'bytesSent: ' + bytesSent,
+      'bytesReceived: ' + bytesReceived,
+      'upMbps(now): ' + upMbps,
+      'downMbps(now): ' + downMbps,
+      'localCandidate: ' + localIp + ' (' + (localCand?.candidateType || 'n/a') + ', ' + (localCand?.networkType || 'n/a') + ')',
+      'remoteCandidate: ' + remoteIp + ' (' + (remoteCand?.candidateType || 'n/a') + ')',
+      'localIPv6? ' + String(localIp.includes(':')),
+      'peerIPv6? ' + String(remoteIp.includes(':')),
+      'audioOutPackets: ' + (audioOut?.packetsSent ?? 'n/a'),
+      'audioInPackets: ' + (audioIn?.packetsReceived ?? 'n/a'),
+      'audioInLost: ' + (audioIn?.packetsLost ?? 'n/a'),
+    ].join('\n');
+  }
+
+  function startStatsLoop() {
+    if (statsTimer) return;
+    statsTimer = setInterval(() => {
+      renderStats().catch(() => {});
+    }, 1000);
+  }
+
   function ensurePeer() {
     if (pc) return pc;
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    startStatsLoop();
 
     pc.onicecandidate = (e) => {
       if (e.candidate && peerNpub) send({ type: 'ice', to: peerNpub, candidate: e.candidate });

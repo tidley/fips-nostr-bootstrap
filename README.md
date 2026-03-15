@@ -172,6 +172,7 @@ Notes:
 - No whitelist in this video demo; it is direct peer npub signaling.
 - Uses WebRTC with a public STUN server for basic NAT traversal.
 - Includes mic mute/unmute and speaker mute/unmute buttons.
+- Dark-mode UI with geek stats: RTT, bytes sent/received, instant throughput, selected ICE candidates, IPv6 hints, audio packet counters.
 - It is intentionally simple (1:1 peer signaling, no auth hardening, no recording).
 
 ## SSH-like demos
