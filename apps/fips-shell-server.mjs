@@ -24,8 +24,9 @@ const sessions = new Map();
 const sessionState = new Map(); // sessionId -> { cwd }
 
 function runCommand(cmd, cwd) {
-  return new Promise((resolve) => {
-    exec(cmd, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024, cwd }, (error, stdout, stderr) => {
+  let childRef = null;
+  const promise = new Promise((resolve) => {
+    const child = exec(cmd, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024, cwd }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
         code: error?.code ?? 0,
@@ -34,19 +35,38 @@ function runCommand(cmd, cwd) {
         error: error ? String(error.message || error) : null,
       });
     });
+    childRef = child;
   });
+  return { child: childRef, promise };
 }
 
 node.on('reject', (r) => console.error('[reject]', r));
 node.on('session', ({ sessionId, remote, session }) => {
   if (sessions.has(sessionId)) return;
   sessions.set(sessionId, session);
-  sessionState.set(sessionId, { cwd: process.cwd() });
+  sessionState.set(sessionId, { cwd: process.cwd(), running: null });
   console.log('[session]', sessionId, remote);
+
+  session.on('channel:shell_interrupt', () => {
+    const state = sessionState.get(sessionId);
+    if (state?.running && typeof state.running.kill === 'function') {
+      state.running.kill('SIGINT');
+      session.send('shell_result', {
+        id: `interrupt-${Date.now()}`,
+        command: '^C',
+        ok: false,
+        code: 130,
+        stdout: '',
+        stderr: 'Interrupted (SIGINT)',
+        cwd: state.cwd,
+        ts: Date.now(),
+      }, 'response');
+    }
+  });
 
   session.on('channel:shell', async (payload) => {
     const command = String(payload?.cmd || '').trim();
-    const state = sessionState.get(sessionId) || { cwd: process.cwd() };
+    const state = sessionState.get(sessionId) || { cwd: process.cwd(), running: null };
 
     if (!command) {
       session.send('shell_result', { id: payload?.id, ok: true, command, stdout: '', stderr: '', cwd: state.cwd }, 'response');
@@ -87,7 +107,28 @@ node.on('session', ({ sessionId, remote, session }) => {
       return;
     }
 
-    const result = await runCommand(command, state.cwd);
+    if (state.running) {
+      session.send('shell_result', {
+        id: payload?.id,
+        command,
+        ok: false,
+        code: 1,
+        stdout: '',
+        stderr: 'another command is still running; press Ctrl-C first',
+        cwd: state.cwd,
+        ts: Date.now(),
+      }, 'response');
+      return;
+    }
+
+    const run = runCommand(command, state.cwd);
+    state.running = run.child;
+    sessionState.set(sessionId, state);
+
+    const result = await run.promise;
+    state.running = null;
+    sessionState.set(sessionId, state);
+
     session.send('shell_result', {
       id: payload?.id,
       command,

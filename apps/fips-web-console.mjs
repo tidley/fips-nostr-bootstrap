@@ -100,6 +100,15 @@ term.addEventListener('keydown', async (e) => {
     return;
   }
 
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+    e.preventDefault();
+    writeLine('^C');
+    await fetch('/api/ctrlc',{method:'POST'});
+    cmdInFlight = false;
+    setPrompt();
+    return;
+  }
+
   if (e.key === 'Enter') {
     e.preventDefault();
     if (cmdInFlight) return;
@@ -111,7 +120,6 @@ term.addEventListener('keydown', async (e) => {
     const d = await r.json();
     if (!d.ok) { writeLine('[error] ' + d.error); setPrompt(); cmdInFlight=false; }
     else {
-      writeLine('[sent ' + d.id + ']');
       const t = setTimeout(() => {
         if (pending.has(d.id)) {
           pending.delete(d.id);
@@ -215,6 +223,19 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
       }
     });
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/ctrlc') {
+    try {
+      if (!active?.session) throw new Error('not connected');
+      active.session.send('shell_interrupt', { ts: Date.now() }, 'request');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+    }
     return;
   }
 
