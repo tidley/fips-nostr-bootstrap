@@ -158,12 +158,19 @@ A lightweight browser-to-browser video call demo is included:
 node apps/fips-video-chat.mjs --port 8088
 ```
 
-Open the page on both devices (same server URL), enter the same room id, click **Start camera+mic**, then one side clicks **Call**.
+Open the page on both devices (same server URL). Each browser tab now generates an **ephemeral npub** and displays a QR code.
+
+Flow:
+1. User A opens page and shares/scans their npub QR.
+2. User B pastes A's npub into peer field and clicks **Connect**.
+3. Click **Start camera+mic** on both.
+4. One side clicks **Call**.
 
 Notes:
-- This uses WebRTC with a public STUN server for basic NAT traversal.
+- No whitelist in this video demo; it is direct peer npub signaling.
+- Uses WebRTC with a public STUN server for basic NAT traversal.
 - Includes mic mute/unmute and speaker mute/unmute buttons.
-- It is intentionally simple (1:1 room, no auth, no recording).
+- It is intentionally simple (1:1 peer signaling, no auth hardening, no recording).
 
 ## SSH-like demos
 
