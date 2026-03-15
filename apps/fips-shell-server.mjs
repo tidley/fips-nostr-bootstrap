@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { exec } from 'node:child_process';
+import path from 'node:path';
+import fs from 'node:fs';
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
@@ -19,10 +21,11 @@ const node = createFipsNostrRendezvousNode({
 });
 
 const sessions = new Map();
+const sessionState = new Map(); // sessionId -> { cwd }
 
-function runCommand(cmd) {
+function runCommand(cmd, cwd) {
   return new Promise((resolve) => {
-    exec(cmd, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
+    exec(cmd, { timeout: 30_000, maxBuffer: 2 * 1024 * 1024, cwd }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
         code: error?.code ?? 0,
@@ -36,21 +39,60 @@ function runCommand(cmd) {
 
 node.on('reject', (r) => console.error('[reject]', r));
 node.on('session', ({ sessionId, remote, session }) => {
+  if (sessions.has(sessionId)) return;
   sessions.set(sessionId, session);
+  sessionState.set(sessionId, { cwd: process.cwd() });
   console.log('[session]', sessionId, remote);
 
-  session.on('channel:shell', async (payload, frame) => {
+  session.on('channel:shell', async (payload) => {
     const command = String(payload?.cmd || '').trim();
+    const state = sessionState.get(sessionId) || { cwd: process.cwd() };
+
     if (!command) {
-      session.send('shell_result', { id: payload?.id, ok: false, error: 'empty command' }, 'response');
+      session.send('shell_result', { id: payload?.id, ok: true, command, stdout: '', stderr: '', cwd: state.cwd }, 'response');
       return;
     }
 
-    const result = await runCommand(command);
+    if (command === 'cd' || command.startsWith('cd ')) {
+      const target = command === 'cd' ? process.env.HOME || state.cwd : command.slice(3).trim();
+      try {
+        const resolved = path.resolve(state.cwd, target);
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+          throw new Error(`cd: no such directory: ${target}`);
+        }
+        state.cwd = resolved;
+        sessionState.set(sessionId, state);
+        session.send('shell_result', {
+          id: payload?.id,
+          command,
+          ok: true,
+          code: 0,
+          stdout: '',
+          stderr: '',
+          cwd: state.cwd,
+          ts: Date.now(),
+        }, 'response');
+      } catch (e) {
+        session.send('shell_result', {
+          id: payload?.id,
+          command,
+          ok: false,
+          code: 1,
+          stdout: '',
+          stderr: String(e.message || e),
+          cwd: state.cwd,
+          ts: Date.now(),
+        }, 'response');
+      }
+      return;
+    }
+
+    const result = await runCommand(command, state.cwd);
     session.send('shell_result', {
       id: payload?.id,
       command,
       ...result,
+      cwd: state.cwd,
       ts: Date.now(),
     }, 'response');
   });

@@ -23,60 +23,121 @@ function emit(type, data) {
   for (const res of eventClients) res.write(line);
 }
 
-node.on('session', ({ sessionId, remote, session }) => {
+function attachSession(sessionId, remote, session) {
+  if (active?.sessionId === sessionId) return;
   active = { sessionId, remote, session };
+  session.on('channel:shell_result', (payload) => emit('result', payload));
   emit('status', { connected: true, sessionId, remote });
+}
 
-  session.on('channel:shell_result', (payload) => {
-    emit('result', payload);
-  });
+node.on('session', ({ sessionId, remote, session }) => {
+  attachSession(sessionId, remote, session);
 });
 
 const html = `<!doctype html>
-<html><head><meta charset="utf-8"/><title>FIPS Nostr Console</title>
-<style>body{font-family:system-ui;max-width:900px;margin:20px auto;padding:0 12px}textarea{width:100%;height:320px}input,button{font-size:14px;padding:8px}code{background:#eee;padding:2px 4px}</style>
-</head><body>
-<h2>FIPS Nostr Web Console</h2>
-<p>Local npub: <code id="local">${started.npub}</code></p>
-<div>
-<input id="npub" placeholder="Target npub" style="width:70%"/>
-<button id="connect">Connect</button>
+<html><head><meta charset="utf-8"/><title>FIPS SSH-like Console</title>
+<style>
+body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#1b1d1e;color:#d8d8d8;max-width:1000px;margin:18px auto;padding:0 12px}
+.panel{background:#232629;border:1px solid #3b3f42;border-radius:6px;padding:10px}
+input,button{font-family:inherit;font-size:13px;padding:7px;background:#2c2f33;color:#d8d8d8;border:1px solid #555;border-radius:4px}
+button{cursor:pointer}
+#term{width:100%;height:520px;background:#1e1e1e;color:#e6e6e6;border:1px solid #444;border-radius:6px;padding:10px;box-sizing:border-box;resize:vertical}
+.meta{color:#9ea7ad;font-size:12px}
+.ok{color:#8bd49c}
+.err{color:#ff7f7f}
+</style></head><body>
+<h3>FIPS SSH-like Console</h3>
+<div class="panel" style="margin-bottom:10px">
+  <div class="meta">Local npub: <code>${started.npub}</code></div>
+  <div style="margin-top:8px;display:flex;gap:8px">
+    <input id="npub" placeholder="Target npub" style="flex:1"/>
+    <button id="connect">Connect</button>
+  </div>
+  <div id="status" class="meta" style="margin-top:8px">Status: idle</div>
 </div>
-<div style="margin-top:10px">
-<input id="cmd" placeholder="command (e.g. uname -a)" style="width:70%"/>
-<button id="send">Send</button>
-</div>
-<p id="status">Status: idle</p>
-<textarea id="out" readonly></textarea>
+<textarea id="term" spellcheck="false"></textarea>
 <script>
-const out = document.getElementById('out');
-const status = document.getElementById('status');
-function log(x){ out.value += x + '\\n'; out.scrollTop = out.scrollHeight; }
+const term = document.getElementById('term');
+const statusEl = document.getElementById('status');
+let prompt = 'fips@peer:$ ';
+let cmdInFlight = false;
+let cwd = '~';
+const seen = new Set();
+
+function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
+function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
+function init(){ term.value=''; writeLine('Connected UI ready. Paste npub and press Connect.'); setPrompt(); }
+init();
+
+function currentLine(){
+  const parts = term.value.split('\\n');
+  return parts[parts.length-1];
+}
+
+function replaceCurrentLine(s){
+  const parts = term.value.split('\\n');
+  parts[parts.length-1] = s;
+  term.value = parts.join('\\n');
+}
+
+function lockCursorEnd(){
+  term.selectionStart = term.value.length;
+  term.selectionEnd = term.value.length;
+}
+
+term.addEventListener('click', lockCursorEnd);
+term.addEventListener('keyup', lockCursorEnd);
+term.addEventListener('keydown', async (e) => {
+  const line = currentLine();
+  if (!line.startsWith(prompt)) {
+    replaceCurrentLine(prompt);
+    lockCursorEnd();
+  }
+
+  if (e.key === 'Backspace' && term.selectionStart <= term.value.lastIndexOf(prompt) + prompt.length) {
+    e.preventDefault();
+    return;
+  }
+
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (cmdInFlight) return;
+    const cmd = currentLine().slice(prompt.length).trim();
+    writeLine('');
+    if (!cmd) { setPrompt(); return; }
+    cmdInFlight = true;
+    const r = await fetch('/api/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({cmd})});
+    const d = await r.json();
+    if (!d.ok) { writeLine('[error] ' + d.error); setPrompt(); cmdInFlight=false; }
+    else writeLine('[sent ' + d.id + ']');
+  }
+});
 
 const es = new EventSource('/api/events');
 es.addEventListener('status', ev => {
   const d = JSON.parse(ev.data);
-  status.textContent = d.connected ? 'Status: connected ' + d.sessionId : 'Status: idle';
-  log('[status] ' + JSON.stringify(d));
+  statusEl.textContent = d.connected ? ('Status: connected ' + d.sessionId + ' -> ' + d.remote.host + ':' + d.remote.port) : 'Status: idle';
 });
+
 es.addEventListener('result', ev => {
   const d = JSON.parse(ev.data);
-  log('\\n$ ' + d.command + '\\n' + (d.stdout||'') + (d.stderr||''));
-  if(!d.ok) log('[error] ' + (d.error||('exit '+d.code)));
+  if (d.id && seen.has(d.id)) return;
+  if (d.id) seen.add(d.id);
+  if (d.cwd) { cwd = d.cwd; prompt = 'fips@peer:' + cwd + '$ '; }
+  if (d.stdout) writeLine(d.stdout.replace(/\n$/,''));
+  if (d.stderr) writeLine('[stderr] ' + d.stderr.replace(/\n$/,''));
+  if (!d.ok) writeLine('[exit ' + (d.code ?? 1) + '] ' + (d.error || 'error'));
+  setPrompt();
+  cmdInFlight = false;
 });
 
 document.getElementById('connect').onclick = async () => {
   const npub = document.getElementById('npub').value.trim();
   const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
   const d = await r.json();
-  log('[connect] ' + JSON.stringify(d));
-};
-
-document.getElementById('send').onclick = async () => {
-  const cmd = document.getElementById('cmd').value;
-  const r = await fetch('/api/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({cmd})});
-  const d = await r.json();
-  log('[send] ' + JSON.stringify(d));
+  if (!d.ok) writeLine('[connect error] ' + d.error);
+  else writeLine('[connected] ' + d.sessionId);
+  setPrompt();
 };
 </script>
 </body></html>`;
@@ -95,7 +156,7 @@ const server = http.createServer(async (req, res) => {
       connection: 'keep-alive',
     });
     eventClients.add(res);
-    res.write(`event: status\ndata: ${JSON.stringify({ connected: !!active, sessionId: active?.sessionId || null })}\n\n`);
+    res.write(`event: status\ndata: ${JSON.stringify({ connected: !!active, sessionId: active?.sessionId || null, remote: active?.remote || null })}\n\n`);
     req.on('close', () => eventClients.delete(res));
     return;
   }
@@ -108,9 +169,7 @@ const server = http.createServer(async (req, res) => {
         const { npub } = JSON.parse(b || '{}');
         if (!npub) throw new Error('missing npub');
         const conn = await node.connect(npub, { waitMs: 60000 });
-        active = { sessionId: conn.nonce, remote: conn.remote, session: conn.session };
-        active.session.on('channel:shell_result', (payload) => emit('result', payload));
-        emit('status', { connected: true, sessionId: conn.nonce, remote: conn.remote });
+        attachSession(conn.nonce, conn.remote, conn.session);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, sessionId: conn.nonce, remote: conn.remote }));
       } catch (e) {

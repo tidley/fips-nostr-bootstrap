@@ -237,6 +237,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     const established = await this.waitForPunch(helloNonce, opts.punchWaitMs || (serverInfo.punch?.durationMs || 30000) + 5000);
     const remote = established?.remote || serverInfo.endpoint;
     const session = new FipsStackSession({ socket: this.socket, remote, sessionId: helloNonce });
+    this.sessions.set(helloNonce, session);
     this.emit('session', { sessionId: helloNonce, remote, session });
     return { nonce: helloNonce, established, remote, socket: this.socket, session };
   }
