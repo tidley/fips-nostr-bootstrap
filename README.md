@@ -150,6 +150,20 @@ This is the reusable library layer for trusted-npub rendezvous + punch establish
 
 ---
 
+## Simple web video chat demo
+
+A lightweight browser-to-browser video call demo is included:
+
+```bash
+node apps/fips-video-chat.mjs --port 8088
+```
+
+Open the page on both devices (same server URL), enter the same room id, click **Start camera**, then one side clicks **Call**.
+
+Notes:
+- This uses WebRTC with a public STUN server for basic NAT traversal.
+- It is intentionally simple (1:1 room, no auth, no recording).
+
 ## SSH-like demos
 
 ### A) Web console (single-pane, Terminator-like)
