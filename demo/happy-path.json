@@ -4,11 +4,11 @@
   "now": 1700000000,
   "events": [
     {
-      "kind": "fipps.bootstrap.init",
+      "kind": "fips.bootstrap.init",
       "sessionId": "demo-happy-1",
       "fromNostrPubkey": "npub_initiator",
       "toNostrPubkey": "npub_responder",
-      "fromFippsIdentity": "fips-init",
+      "fromFipsIdentity": "fips-init",
       "ephemeralPubkey": "epk-init",
       "expiresAt": 1700001000,
       "createdAt": 1700000001,
@@ -16,11 +16,11 @@
       "sig": "sig-init"
     },
     {
-      "kind": "fipps.bootstrap.ack",
+      "kind": "fips.bootstrap.ack",
       "sessionId": "demo-happy-1",
       "fromNostrPubkey": "npub_responder",
       "toNostrPubkey": "npub_initiator",
-      "fromFippsIdentity": "fips-resp",
+      "fromFipsIdentity": "fips-resp",
       "ephemeralPubkey": "epk-resp",
       "expiresAt": 1700001000,
       "createdAt": 1700000002,
@@ -28,22 +28,22 @@
       "sig": "sig-ack"
     },
     {
-      "kind": "fipps.bootstrap.confirm",
+      "kind": "fips.bootstrap.confirm",
       "sessionId": "demo-happy-1",
       "fromNostrPubkey": "npub_initiator",
       "toNostrPubkey": "npub_responder",
-      "fromFippsIdentity": "fips-init",
+      "fromFipsIdentity": "fips-init",
       "expiresAt": 1700001000,
       "createdAt": 1700000003,
       "payload": {},
       "sig": "sig-confirm"
     },
     {
-      "kind": "fipps.bootstrap.confirm",
+      "kind": "fips.bootstrap.confirm",
       "sessionId": "demo-happy-1",
       "fromNostrPubkey": "npub_responder",
       "toNostrPubkey": "npub_initiator",
-      "fromFippsIdentity": "fips-resp",
+      "fromFipsIdentity": "fips-resp",
       "expiresAt": 1700001000,
       "createdAt": 1700000004,
       "payload": {},

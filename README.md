@@ -1,39 +1,75 @@
-# FIPPS Nostr Bootstrap
+# FIPS Nostr Bootstrap
 
-Nostr is used as a **bootstrap/signalling layer only** for FIPPS peers.
+Prototype where **Nostr is signalling-only** and FIPS transport is direct UDP (with fallback).
 
-- Use relays for discovery, rendezvous, and signed handshake setup material.
-- Switch to direct/chosen FIPPS transport immediately after session derivation.
-- Keep bulk app traffic off relays.
+## Implemented in this repo
 
-## What this repo contains
+### Protocol + artifacts
+- `docs/protocol-spec-v0.2.md` — protocol phases, security boundary, deterministic state model
+- `docs/message-schema.json` — required common signalling fields
+- `docs/state-machine.mmd` — state machine diagram (Mermaid)
+- `docs/nat-test-plan.md` — NAT traversal test matrix and metrics
+- `docs/failure-taxonomy.md` — failure classes + refinement checklist
 
-- `spec/bootstrap-v0.1.md` — concrete protocol design (kinds/tags, state machine, retry/replay, key lifecycle)
-- `src/` — minimal reference skeleton for bootstrap message validation + handshake state flow
-
-## Repo goals
-
-1. Make bootstrap interoperability explicit.
-2. Keep trust/security in FIPPS, not relay behavior.
-3. Support offline/asynchronous rendezvous with signed Nostr events.
+### Reference implementation modules (`src/`)
+- `identity.ts` — nonce/session generation + message signing/verification
+- `signal_nostr.ts` — in-memory signalling adapter abstraction (Nostr role)
+- `handshake.ts` — deterministic state machine with replay/timestamp/expiry checks
+- `nat_probe.ts` — direct UDP probe strategy model
+- `session.ts` — post-bootstrap session binding store
+- `fallback.ts` — fallback decision logic
+- `metrics.ts` — handshake/direct/fallback metrics
+- `test_harness.ts` — deterministic local integration harness
 
 ## Quick start
 
 ```bash
 npm install
 npm run build
+npm test
 ```
 
-## Demo commands
+## Real transport latency/speed test (runnable from repo)
 
+### Single-host quick check
 ```bash
-npm run demo:preflight
-npm run demo:happy
-npm run demo:failures
+npm run test:transport
 ```
 
-These provide deterministic, presentation-ready output for:
-- happy path establishment
-- expired event rejection
-- replay detection
-- retry success with fresh session
+### Two-computer test via Nostr DM (client input = only npub)
+
+Set env on both machines:
+```bash
+export NOSTR_NSEC=<your_nsec>
+export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net"
+```
+
+On **server machine**:
+```bash
+# Optional: advertised host override if auto-detect is wrong
+export FIPS_UDP_PUBLIC_HOST=<server_public_or_routable_ip>
+node scripts/udp-transport-via-nostr.mjs --mode server --port 9999
+```
+Server prints its `npub`.
+
+On **client machine**:
+```bash
+node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 500 --payload 256 --warmup 30 --timeout 3000
+```
+
+The client discovers endpoint info through encrypted Nostr DM handshake, then runs UDP latency/speed benchmark.
+
+Outputs JSON including:
+- setup time (first successful probe RTT + setup duration)
+- RTT stats (avg/p50/p95/p99/min/max)
+- estimated throughput (Mbps)
+
+Notes:
+- Client requires only `--npub` as input.
+- Allow inbound UDP on server port (example: 9999).
+- Add `--show-endpoints` if you want endpoint addresses printed in output.
+
+## Notes
+- Relays are coordination-only; data plane leaves Nostr after connect-confirm.
+- Replay safety is enforced with nonce cache + monotonic timestamp checks.
+- Direct establishment attempts are bounded; failures transition cleanly to fallback.

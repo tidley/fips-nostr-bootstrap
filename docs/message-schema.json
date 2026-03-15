@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FIPS bootstrap signalling message",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "messageType",
+    "senderIdentity",
+    "recipientIdentity",
+    "sessionId",
+    "monotonicTimestamp",
+    "expiry",
+    "nonce",
+    "signature"
+  ],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "messageType": {
+      "enum": [
+        "bootstrap_announce",
+        "bootstrap_ack",
+        "connect_probe",
+        "connect_confirm",
+        "rekey",
+        "retry_hint",
+        "abort"
+      ]
+    },
+    "senderIdentity": { "type": "string", "minLength": 1 },
+    "recipientIdentity": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "monotonicTimestamp": { "type": "integer", "minimum": 0 },
+    "expiry": { "type": "integer", "minimum": 0 },
+    "nonce": { "type": "string", "minLength": 1 },
+    "signature": { "type": "string", "minLength": 1 },
+    "correlationId": { "type": "string" },
+    "parentId": { "type": "string" }
+  },
+  "additionalProperties": true
+}

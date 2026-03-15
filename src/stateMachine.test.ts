@@ -1,77 +1,64 @@
 import { describe, expect, it } from 'vitest';
 
-import { BootstrapSession } from './stateMachine.js';
-import type { BootstrapEvent } from './types.js';
+import { signMessage } from './identity.js';
+import { HandshakeMachine } from './handshake.js';
+import type { BootstrapAck, BootstrapAnnounce, ConnectConfirm, ConnectProbe, RetryHint } from './types.js';
 
-let c = 1;
-function ev(kind: BootstrapEvent['kind'], overrides: Partial<BootstrapEvent> = {}): BootstrapEvent {
-  return {
-    kind,
-    sessionId: 's1',
-    fromNostrPubkey: 'npub_a',
-    fromFippsIdentity: 'fipps_a',
-    expiresAt: 9999999999,
-    createdAt: c++,
-    payload: {},
-    sig: 'sig',
-    ...overrides,
-  };
+const key = 'test';
+
+const base = {
+  protocolVersion: '1.0' as const,
+  senderIdentity: 'peer-remote',
+  recipientIdentity: 'peer-local',
+  sessionId: 'sid-1',
+  expiry: 999999,
+};
+
+function announce(ts: number, nonce: string): BootstrapAnnounce {
+  return signMessage({ ...base, messageType: 'bootstrap_announce', monotonicTimestamp: ts, nonce, capabilities: ['udp_direct'], candidateEndpoints: [{ host: '1.1.1.1', port: 1111, transport: 'udp', priority: 1 }], ephemeralHandshakeMaterial: 'aepk' }, key);
+}
+function ack(ts: number, nonce: string): BootstrapAck {
+  return signMessage({ ...base, messageType: 'bootstrap_ack', monotonicTimestamp: ts, nonce, selectedTransportMode: 'udp_direct', candidateEndpoints: [{ host: '2.2.2.2', port: 2222, transport: 'udp', priority: 1 }], ephemeralHandshakeMaterial: 'bepk', punchWindowMs: 600 }, key);
+}
+function probe(ts: number, nonce: string): ConnectProbe {
+  return signMessage({ ...base, messageType: 'connect_probe', monotonicTimestamp: ts, nonce, endpoint: { host: '2.2.2.2', port: 2222, transport: 'udp', priority: 1 }, probeIndex: 1 }, key);
+}
+function confirm(ts: number, nonce: string): ConnectConfirm {
+  return signMessage({ ...base, messageType: 'connect_confirm', monotonicTimestamp: ts, nonce, selectedEndpoint: { host: '2.2.2.2', port: 2222, transport: 'udp', priority: 1 }, negotiatedParameters: { cipher: 'x25519+chacha20' } }, key);
+}
+function retry(ts: number, nonce: string): RetryHint {
+  return signMessage({ ...base, messageType: 'retry_hint', monotonicTimestamp: ts, nonce, retryAfterMs: 200, preferredCandidateOrder: ['udp_direct'] }, key);
 }
 
-describe('BootstrapSession', () => {
-  it('follows happy path to ESTABLISHED', () => {
-    const s = new BootstrapSession();
-    expect(s.apply(ev('fipps.bootstrap.init')).state).toBe('INIT_SENT');
-    expect(s.apply(ev('fipps.bootstrap.ack')).state).toBe('ACK_RECEIVED');
-    expect(s.apply(ev('fipps.bootstrap.confirm')).state).toBe('SWITCHING');
-    expect(s.apply(ev('fipps.bootstrap.confirm')).state).toBe('ESTABLISHED');
+describe('HandshakeMachine', () => {
+  it('follows deterministic happy path to direct_established', () => {
+    const m = new HandshakeMachine({ identity: 'peer-local', ackTimeoutMs: 1000, probeTimeoutMs: 1000, maxMonotonicSkewMs: 0 });
+    expect(m.apply(announce(1, 'n1'), 1).state).toBe('awaiting_ack');
+    expect(m.apply(ack(2, 'n2'), 2).state).toBe('acknowledged');
+    expect(m.apply(probe(3, 'n3'), 3).state).toBe('probing');
+    expect(m.apply(confirm(4, 'n4'), 4).state).toBe('direct_established');
   });
 
-  it('fails on replay', () => {
-    const s = new BootstrapSession();
-    const e = ev('fipps.bootstrap.init', { createdAt: 10 });
-    expect(s.apply(e).state).toBe('INIT_SENT');
-    expect(s.apply(e).state).toBe('FAILED');
+  it('rejects replay nonce', () => {
+    const m = new HandshakeMachine({ identity: 'peer-local', ackTimeoutMs: 1000, probeTimeoutMs: 1000, maxMonotonicSkewMs: 0 });
+    m.apply(announce(1, 'n1'), 1);
+    const r = m.apply(announce(2, 'n1'), 2);
+    expect(r.accepted).toBe(false);
+    expect(r.reason).toBe('replay-nonce');
   });
 
-  it('fails on expired event', () => {
-    const s = new BootstrapSession();
-    const r = s.apply(ev('fipps.bootstrap.init', { expiresAt: 1 }), 10);
-    expect(r.state).toBe('FAILED');
-    expect(r.reason).toBe('expired-event');
+  it('handles delayed ack via timeout -> fallback_pending', () => {
+    const m = new HandshakeMachine({ identity: 'peer-local', ackTimeoutMs: 10, probeTimeoutMs: 1000, maxMonotonicSkewMs: 0 });
+    m.apply(announce(1, 'n1'), 1);
+    expect(m.onTimeout(50).state).toBe('fallback_pending');
+    expect(m.apply(retry(60, 'n2'), 60).state).toBe('announced');
   });
 
-  it('fails on invalid transition', () => {
-    const s = new BootstrapSession();
-    const r = s.apply(ev('fipps.bootstrap.ack'));
-    expect(r.state).toBe('FAILED');
-    expect(r.reason).toBe('invalid-transition');
-  });
-
-  it('fails on wrong event while in INIT_SENT and ACK_RECEIVED', () => {
-    const s1 = new BootstrapSession();
-    s1.apply(ev('fipps.bootstrap.init'));
-    const r1 = s1.apply(ev('fipps.bootstrap.confirm'));
-    expect(r1.state).toBe('FAILED');
-
-    const s2 = new BootstrapSession();
-    s2.apply(ev('fipps.bootstrap.init'));
-    s2.apply(ev('fipps.bootstrap.ack'));
-    const r2 = s2.apply(ev('fipps.bootstrap.fail'));
-    expect(r2.state).toBe('FAILED');
-  });
-
-  it('stays failed on subsequent unexpected events', () => {
-    const s = new BootstrapSession();
-    s.apply(ev('fipps.bootstrap.ack'));
-    const r = s.apply(ev('fipps.bootstrap.fail'));
-    expect(r.state).toBe('FAILED');
-  });
-
-  it('exposes current state getter', () => {
-    const s = new BootstrapSession();
-    expect(s.getState()).toBe('IDLE');
-    s.apply(ev('fipps.bootstrap.init'));
-    expect(s.getState()).toBe('INIT_SENT');
+  it('rejects out-of-order monotonic timestamps', () => {
+    const m = new HandshakeMachine({ identity: 'peer-local', ackTimeoutMs: 1000, probeTimeoutMs: 1000, maxMonotonicSkewMs: 0 });
+    m.apply(announce(5, 'n1'), 1);
+    const r = m.apply(ack(4, 'n2'), 2);
+    expect(r.accepted).toBe(false);
+    expect(r.reason).toBe('non-monotonic-timestamp');
   });
 });

@@ -1,4 +1,4 @@
-# FIPPS over Nostr Bootstrap v0.1
+# FIPS over Nostr Bootstrap v0.1
 
 ## 1) Scope
 
@@ -13,20 +13,20 @@ Nostr is NOT used for persistent session transport.
 ## 2) Identity model
 
 - `nostr_pubkey`: signalling identity for event authenticity.
-- `fipps_identity`: FIPPS session identity (static or rotating), bound via signed claim.
+- `fips_identity`: FIPS session identity (static or rotating), bound via signed claim.
 - Mapping MUST be explicit in bootstrap messages.
 
 ## 3) Event kinds and tags (proposed)
 
 Use replaceable/event kinds in app namespace (example: `34100-34103`).
 
-### Kind 34100: `fipps.bootstrap.init`
+### Kind 34100: `fips.bootstrap.init`
 
 Fields:
 - `session_id` (UUID/nonce)
 - `from_nostr_pubkey`
 - `to_nostr_pubkey` (or discovery target)
-- `from_fipps_identity`
+- `from_fips_identity`
 - `supported_transports` (direct-tcp, quic, webrtc, etc.)
 - `supported_ciphersuites`
 - `ephemeral_pubkey`
@@ -34,15 +34,15 @@ Fields:
 
 Tags:
 - `p`: target nostr pubkey
-- `fipps`: protocol version
+- `fips`: protocol version
 - `sid`: session id
 
-### Kind 34101: `fipps.bootstrap.ack`
+### Kind 34101: `fips.bootstrap.ack`
 
 Fields:
 - `session_id`
 - `ack_from_nostr_pubkey`
-- `ack_from_fipps_identity`
+- `ack_from_fips_identity`
 - `selected_transport`
 - `selected_ciphersuite`
 - `ephemeral_pubkey`
@@ -53,7 +53,7 @@ Tags:
 - `p`: initiator pubkey
 - `sid`: session id
 
-### Kind 34102: `fipps.bootstrap.confirm`
+### Kind 34102: `fips.bootstrap.confirm`
 
 Fields:
 - `session_id`
@@ -61,7 +61,7 @@ Fields:
 - `key_confirm_mac`
 - `switch_deadline`
 
-### Kind 34103: `fipps.bootstrap.fail`
+### Kind 34103: `fips.bootstrap.fail`
 
 Fields:
 - `session_id`
@@ -84,7 +84,7 @@ Flow:
 1. Initiator publishes `init`.
 2. Responder validates + publishes `ack`.
 3. Initiator validates + publishes `confirm`.
-4. Both derive session keys and switch to selected FIPPS transport.
+4. Both derive session keys and switch to selected FIPS transport.
 5. Nostr usage stops for data plane.
 
 ## 5) Failure and retry
@@ -103,7 +103,7 @@ Flow:
 
 - Bootstrap ephemeral keys: single-use per session.
 - Session keys: derived after confirm; rotate on policy or rekey event.
-- Long-term identity keys: nostr + fipps identities remain separate but linked by signed claims.
+- Long-term identity keys: nostr + fips identities remain separate but linked by signed claims.
 
 ## 8) Security requirements
 

@@ -1,5 +1,5 @@
 {
-  "name": "fipps-nostr-bootstrap",
+  "name": "fips-nostr-bootstrap",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,12 +9,17 @@
     "test:coverage": "vitest run --coverage",
     "demo:preflight": "npm run build && node scripts/demo.mjs preflight",
     "demo:happy": "npm run build && node scripts/demo.mjs happy",
-    "demo:failures": "npm run build && node scripts/demo.mjs failures"
+    "demo:failures": "npm run build && node scripts/demo.mjs failures",
+    "test:transport": "node scripts/udp-transport-test.mjs",
+    "test:transport:nostr": "node scripts/udp-transport-via-nostr.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
     "@vitest/coverage-v8": "^1.6.1",
     "typescript": "^5.6.3",
     "vitest": "^1.6.1"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.23.3"
   }
 }

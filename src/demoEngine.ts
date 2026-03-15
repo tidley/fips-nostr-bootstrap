@@ -1,12 +1,11 @@
-import { BootstrapSession } from './stateMachine.js';
-import type { BootstrapEvent, HandshakeState } from './types.js';
-import { validateBootstrapEvent } from './validate.js';
+import { HandshakeMachine } from './handshake.js';
+import type { HandshakeState, SignalMessage } from './types.js';
 
 export interface DemoStepResult {
   index: number;
-  kind: BootstrapEvent['kind'];
-  validationOk: boolean;
-  transitionState: HandshakeState;
+  type: SignalMessage['messageType'];
+  accepted: boolean;
+  state: HandshakeState;
   reason?: string;
 }
 
@@ -16,38 +15,20 @@ export interface DemoRunResult {
   steps: DemoStepResult[];
 }
 
-export function runDemo(events: BootstrapEvent[], now: number): DemoRunResult {
-  const session = new BootstrapSession();
+export function runDemo(messages: SignalMessage[], now: number): DemoRunResult {
+  const machine = new HandshakeMachine({
+    identity: 'local-demo',
+    ackTimeoutMs: 1000,
+    probeTimeoutMs: 1000,
+    maxMonotonicSkewMs: 5,
+  });
   const steps: DemoStepResult[] = [];
 
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    const v = validateBootstrapEvent(e, now);
-    if (!v.ok) {
-      steps.push({
-        index: i,
-        kind: e.kind,
-        validationOk: false,
-        transitionState: 'FAILED',
-        reason: v.reason,
-      });
-      return { finalState: 'FAILED', success: false, steps };
-    }
+  messages.forEach((m, i) => {
+    const r = machine.apply(m, now + i);
+    steps.push({ index: i, type: m.messageType, accepted: r.accepted, state: r.state, reason: r.reason });
+  });
 
-    const t = session.apply(e, now);
-    steps.push({
-      index: i,
-      kind: e.kind,
-      validationOk: true,
-      transitionState: t.state,
-      reason: t.reason,
-    });
-
-    if (t.state === 'FAILED') {
-      return { finalState: 'FAILED', success: false, steps };
-    }
-  }
-
-  const finalState = session.getState();
-  return { finalState, success: finalState === 'ESTABLISHED', steps };
+  const finalState = machine.getState();
+  return { finalState, success: finalState === 'direct_established' || finalState === 'fallback_established', steps };
 }

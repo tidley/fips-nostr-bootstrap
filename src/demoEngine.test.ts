@@ -1,49 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
+import { signMessage } from './identity.js';
 import { runDemo } from './demoEngine.js';
-import type { BootstrapEvent } from './types.js';
+import type { BootstrapAck, BootstrapAnnounce, ConnectConfirm, ConnectProbe } from './types.js';
 
-function ev(kind: BootstrapEvent['kind'], createdAt: number): BootstrapEvent {
-  return {
-    kind,
-    sessionId: 's1',
-    fromNostrPubkey: 'npub_x',
-    fromFippsIdentity: 'fips_x',
-    ephemeralPubkey: kind === 'fipps.bootstrap.confirm' ? undefined : 'epk',
-    expiresAt: 1000,
-    createdAt,
-    payload: {},
-    sig: 'sig',
-  };
+const base = {
+  protocolVersion: '1.0' as const,
+  senderIdentity: 'peer-remote',
+  recipientIdentity: 'local-demo',
+  sessionId: 's1',
+  expiry: 1000,
+};
+
+function mkHappy() {
+  const a: BootstrapAnnounce = signMessage({ ...base, messageType: 'bootstrap_announce', monotonicTimestamp: 1, nonce: 'a', capabilities: ['udp_direct'], candidateEndpoints: [{ host: '10.0.0.1', port: 1001, transport: 'udp', priority: 1 }], ephemeralHandshakeMaterial: 'aepk' }, 'k');
+  const b: BootstrapAck = signMessage({ ...base, messageType: 'bootstrap_ack', monotonicTimestamp: 2, nonce: 'b', selectedTransportMode: 'udp_direct', candidateEndpoints: [{ host: '10.0.0.2', port: 1002, transport: 'udp', priority: 1 }], ephemeralHandshakeMaterial: 'bepk', punchWindowMs: 300 }, 'k');
+  const p: ConnectProbe = signMessage({ ...base, messageType: 'connect_probe', monotonicTimestamp: 3, nonce: 'c', endpoint: { host: '10.0.0.2', port: 1002, transport: 'udp', priority: 1 }, probeIndex: 1 }, 'k');
+  const c: ConnectConfirm = signMessage({ ...base, messageType: 'connect_confirm', monotonicTimestamp: 4, nonce: 'd', selectedEndpoint: { host: '10.0.0.2', port: 1002, transport: 'udp', priority: 1 }, negotiatedParameters: { mode: 'direct' } }, 'k');
+  return [a, b, p, c];
 }
 
 describe('runDemo', () => {
-  it('returns success for established flow', () => {
-    const r = runDemo(
-      [
-        ev('fipps.bootstrap.init', 1),
-        ev('fipps.bootstrap.ack', 2),
-        ev('fipps.bootstrap.confirm', 3),
-        ev('fipps.bootstrap.confirm', 4),
-      ],
-      10,
-    );
-    expect(r.success).toBe(true);
-    expect(r.finalState).toBe('ESTABLISHED');
+  it('returns success on happy path', () => {
+    const out = runDemo(mkHappy(), 10);
+    expect(out.success).toBe(true);
+    expect(out.finalState).toBe('direct_established');
   });
 
-  it('fails fast on validation error', () => {
-    const bad = ev('fipps.bootstrap.init', 1);
-    bad.sig = '';
-    const r = runDemo([bad], 10);
-    expect(r.success).toBe(false);
-    expect(r.finalState).toBe('FAILED');
-    expect(r.steps[0].reason).toBe('missing-signature');
-  });
-
-  it('fails on transition failure', () => {
-    const r = runDemo([ev('fipps.bootstrap.ack', 1)], 10);
-    expect(r.success).toBe(false);
-    expect(r.finalState).toBe('FAILED');
+  it('fails when starting out of order', () => {
+    const [_, ack] = mkHappy();
+    const out = runDemo([ack], 10);
+    expect(out.success).toBe(false);
   });
 });

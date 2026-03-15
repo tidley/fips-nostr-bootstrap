@@ -1,19 +1,23 @@
-import type { BootstrapEvent } from './types.js';
+import { verifyMessageSignature } from './identity.js';
+import type { SignalMessage } from './types.js';
 
 export interface ValidationResult {
   ok: boolean;
   reason?: string;
 }
 
-export function validateBootstrapEvent(event: BootstrapEvent, now = Math.floor(Date.now() / 1000)): ValidationResult {
-  if (!event.sessionId) return { ok: false, reason: 'missing-session-id' };
-  if (!event.fromNostrPubkey) return { ok: false, reason: 'missing-from-pubkey' };
-  if (!event.fromFippsIdentity) return { ok: false, reason: 'missing-fipps-identity' };
-  if (!event.sig) return { ok: false, reason: 'missing-signature' };
-  if (event.expiresAt < now) return { ok: false, reason: 'expired-event' };
+export function validateSignalMessage(msg: SignalMessage, now: number, signerKey: string): ValidationResult {
+  if (msg.protocolVersion !== '1.0') return { ok: false, reason: 'unsupported-version' };
+  if (!msg.senderIdentity) return { ok: false, reason: 'missing-sender-identity' };
+  if (!msg.recipientIdentity) return { ok: false, reason: 'missing-recipient-identity' };
+  if (!msg.sessionId) return { ok: false, reason: 'missing-session-id' };
+  if (!msg.nonce) return { ok: false, reason: 'missing-nonce' };
+  if (msg.expiry < now) return { ok: false, reason: 'expired-message' };
+  if (!verifyMessageSignature(msg, signerKey)) return { ok: false, reason: 'invalid-signature' };
 
-  if (event.kind === 'fipps.bootstrap.init' || event.kind === 'fipps.bootstrap.ack') {
-    if (!event.ephemeralPubkey) return { ok: false, reason: 'missing-ephemeral-key' };
+  if (msg.messageType === 'bootstrap_announce' || msg.messageType === 'bootstrap_ack') {
+    if (!msg.ephemeralHandshakeMaterial) return { ok: false, reason: 'missing-ephemeral-handshake-material' };
+    if (msg.candidateEndpoints.length === 0) return { ok: false, reason: 'missing-candidate-endpoints' };
   }
 
   return { ok: true };

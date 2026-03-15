@@ -1,0 +1,17 @@
+stateDiagram-v2
+  [*] --> idle
+  idle --> awaiting_ack: bootstrap_announce
+  awaiting_ack --> acknowledged: bootstrap_ack
+  awaiting_ack --> fallback_pending: timeout
+  awaiting_ack --> announced: retry_hint
+  announced --> awaiting_ack: bootstrap_announce
+  acknowledged --> probing: connect_probe
+  probing --> direct_established: connect_confirm
+  probing --> probing: connect_probe
+  probing --> fallback_pending: timeout
+  fallback_pending --> announced: retry_hint
+  fallback_pending --> fallback_established: bootstrap_ack (relay-assisted)
+  direct_established --> direct_established: rekey
+  direct_established --> closed: abort
+  fallback_established --> closed: abort
+  closed --> [*]
