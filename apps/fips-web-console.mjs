@@ -63,6 +63,7 @@ let prompt = 'fips@peer:$ ';
 let cmdInFlight = false;
 let cwd = '~';
 const seen = new Set();
+const pending = new Map();
 
 function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
@@ -109,7 +110,18 @@ term.addEventListener('keydown', async (e) => {
     const r = await fetch('/api/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({cmd})});
     const d = await r.json();
     if (!d.ok) { writeLine('[error] ' + d.error); setPrompt(); cmdInFlight=false; }
-    else writeLine('[sent ' + d.id + ']');
+    else {
+      writeLine('[sent ' + d.id + ']');
+      const t = setTimeout(() => {
+        if (pending.has(d.id)) {
+          pending.delete(d.id);
+          writeLine('[timeout] no response for ' + d.id);
+          cmdInFlight = false;
+          setPrompt();
+        }
+      }, 10000);
+      pending.set(d.id, t);
+    }
   }
 });
 
@@ -122,7 +134,14 @@ es.addEventListener('status', ev => {
 es.addEventListener('result', ev => {
   const d = JSON.parse(ev.data);
   if (d.id && seen.has(d.id)) return;
-  if (d.id) seen.add(d.id);
+  if (d.id) {
+    seen.add(d.id);
+    const t = pending.get(d.id);
+    if (t) {
+      clearTimeout(t);
+      pending.delete(d.id);
+    }
+  }
   if (d.cwd) { cwd = d.cwd; prompt = 'fips@peer:' + cwd + '$ '; }
   if (d.stdout) writeLine(d.stdout.replace(/\\n$/,''));
   if (d.stderr) writeLine('[stderr] ' + d.stderr.replace(/\\n$/,''));
