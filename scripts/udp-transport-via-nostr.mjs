@@ -18,6 +18,7 @@ function parseArgs() {
     timeoutMs: 3000,
     waitMs: 30000,
     showEndpoints: false,
+    debug: false,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -32,6 +33,7 @@ function parseArgs() {
     if (a === '--timeout' && Number.isFinite(Number(v))) out.timeoutMs = Number(v);
     if (a === '--wait' && Number.isFinite(Number(v))) out.waitMs = Number(v);
     if (a === '--show-endpoints') out.showEndpoints = true;
+    if (a === '--debug') out.debug = true;
   }
   return out;
 }
@@ -86,12 +88,18 @@ async function bindSocket(socket, host, port) {
   });
 }
 
-function publishDM({ pool, relays, sk, recipientPubkey, obj }) {
+function publishDM({ pool, relays, sk, recipientPubkey, obj, debugLog }) {
   const event = wrapEvent(sk, { publicKey: recipientPubkey }, JSON.stringify(obj));
+  debugLog?.('publish', { kind: event.kind, to: recipientPubkey, type: obj?.type, id: event.id });
   const pubs = pool.publish(relays, event);
-  Promise.allSettled(pubs).catch(() => {
-    // swallow relay write errors; rendezvous retries handle transient failures
-  });
+  Promise.allSettled(pubs)
+    .then((results) => {
+      const summary = results.map((r) => (r.status === 'fulfilled' ? 'ok' : String(r.reason))).slice(0, 8);
+      debugLog?.('publish-result', { type: obj?.type, results: summary });
+    })
+    .catch(() => {
+      // swallow relay write errors; rendezvous retries handle transient failures
+    });
 }
 
 function parseIncomingNip17(event, recipientSk) {
@@ -103,6 +111,7 @@ function parseIncomingNip17(event, recipientSk) {
 }
 
 async function runServer(cfg) {
+  const debugLog = cfg.debug ? (label, data = {}) => console.error(`[debug][server] ${label}`, data) : null;
   const { sk, source: keySource } = resolveSecretKey();
   const relays = relaysFromEnv();
   const pool = new SimplePool();
@@ -123,8 +132,10 @@ async function runServer(cfg) {
 
   const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
     onevent: async (evt) => {
+      debugLog?.('recv-event', { id: evt.id, kind: evt.kind, pubkey: evt.pubkey });
       try {
         const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
+        debugLog?.('recv-msg', { fromPubkey, type: msg?.type, nonce: msg?.nonce });
         if (msg?.type !== 'fips.udp.test.hello' || !msg?.nonce) return;
 
         const reply = {
@@ -134,11 +145,13 @@ async function runServer(cfg) {
           issuedAt: Date.now(),
         };
 
-        publishDM({ pool, relays, sk, recipientPubkey: fromPubkey, obj: reply });
-      } catch {
-        // ignore malformed/incompatible DM
+        publishDM({ pool, relays, sk, recipientPubkey: fromPubkey, obj: reply, debugLog });
+      } catch (err) {
+        debugLog?.('recv-parse-failed', { err: String(err?.message || err) });
       }
     },
+    oneose: () => debugLog?.('eose'),
+    onclose: (reasons) => debugLog?.('sub-close', { reasons }),
   });
 
   console.log(
@@ -167,6 +180,7 @@ async function runServer(cfg) {
 }
 
 async function runClient(cfg) {
+  const debugLog = cfg.debug ? (label, data = {}) => console.error(`[debug][client] ${label}`, data) : null;
   if (!cfg.npub) throw new Error('--npub is required in client mode');
   const decoded = nip19.decode(cfg.npub);
   if (decoded.type !== 'npub') throw new Error('--npub must be valid npub');
@@ -186,22 +200,26 @@ async function runClient(cfg) {
 
     const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since }, {
       onevent: async (evt) => {
+        debugLog?.('recv-event', { id: evt.id, kind: evt.kind, pubkey: evt.pubkey });
         try {
           const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
+          debugLog?.('recv-msg', { fromPubkey, type: msg?.type, nonce: msg?.nonce });
           if (fromPubkey !== serverPubkey) return;
           if (msg?.type !== 'fips.udp.test.server-info') return;
           if (msg?.nonce !== helloNonce) return;
           if (timer) clearInterval(timer);
           sub.close();
           resolve(msg);
-        } catch {
-          // ignore
+        } catch (err) {
+          debugLog?.('recv-parse-failed', { err: String(err?.message || err) });
         }
       },
+      oneose: () => debugLog?.('eose'),
+      onclose: (reasons) => debugLog?.('sub-close', { reasons }),
     });
 
     const hello = { type: 'fips.udp.test.hello', nonce: helloNonce, want: 'udp-endpoint' };
-    publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello });
+    publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello, debugLog });
 
     const republishEveryMs = 7000;
     let nextRepublishAt = Date.now() + republishEveryMs;
@@ -215,7 +233,7 @@ async function runClient(cfg) {
       }
 
       if (now >= nextRepublishAt) {
-        publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello });
+        publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello, debugLog });
         nextRepublishAt = now + republishEveryMs;
       }
     }, 250);

@@ -52,13 +52,13 @@ On **server machine**:
 ```bash
 # Optional: advertised host override if auto-detect is wrong
 export FIPS_UDP_PUBLIC_HOST=<server_public_or_routable_ip>
-node scripts/udp-transport-via-nostr.mjs --mode server --port 9999
+node scripts/udp-transport-via-nostr.mjs --mode server --port 9999 --debug
 ```
 Server prints its generated/loaded `npub` (copy this to client).
 
 On **client machine**:
 ```bash
-node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 500 --payload 256 --warmup 30 --timeout 3000
+node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 500 --payload 256 --warmup 30 --timeout 3000 --debug
 ```
 
 The client discovers endpoint info through encrypted Nostr DM handshake, then runs UDP latency/speed benchmark.

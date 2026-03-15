@@ -90,4 +90,23 @@ describe('NIP-17 rendezvous (TDD guardrails)', () => {
 
     expect(() => unwrapRendezvousMessage(c.sk, event)).toThrow();
   });
+
+  it('supports caller-side nonce correlation checks on returned DM', () => {
+    const server = generateEphemeralIdentity();
+    const client = generateEphemeralIdentity();
+    const expectedNonce = 'nonce-expected';
+
+    const replyEvent = wrapRendezvousMessage(server.sk, client.pubkey, {
+      type: 'fips.udp.test.server-info',
+      nonce: 'different-nonce',
+      endpoint: { host: '203.0.113.5', port: 9999 },
+      issuedAt: 1700000000000,
+    });
+
+    const out = unwrapRendezvousMessage(client.sk, replyEvent);
+    expect(isServerInfoMessage(out.message)).toBe(true);
+    if (isServerInfoMessage(out.message)) {
+      expect(out.message.nonce).not.toBe(expectedNonce);
+    }
+  });
 });
