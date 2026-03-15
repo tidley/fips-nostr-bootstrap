@@ -44,7 +44,11 @@ const html = `<!doctype html>
 
   <div class="row">
     <input id="peerNpub" placeholder="Peer npub (paste or scan)" />
+    <button id="scan">Scan QR</button>
     <button id="connect">Connect</button>
+  </div>
+  <div class="row" id="scanWrap" style="display:none">
+    <video id="scanVideo" autoplay playsinline style="max-width:320px;border:1px solid #ccc;border-radius:8px"></video>
   </div>
 
   <div class="row">
@@ -71,6 +75,8 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   const remoteVideo = document.getElementById('remoteVideo');
   const myNpubEl = document.getElementById('myNpub');
   const qrEl = document.getElementById('qr');
+  const scanWrap = document.getElementById('scanWrap');
+  const scanVideo = document.getElementById('scanVideo');
 
   const sk = generateSecretKey();
   const pub = getPublicKey(sk);
@@ -86,6 +92,8 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   let peerReachable = false;
   let micMuted = false;
   let speakerMuted = false;
+  let scanStream = null;
+  let scanTimer = null;
 
   function status(s) { statusEl.textContent = 'Status: ' + s; }
 
@@ -133,6 +141,44 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
     await p.setLocalDescription(offer);
     send({ type: 'offer', to: peerNpub, sdp: offer });
     status('offer sent to peer');
+  }
+
+  async function startQrScan() {
+    if (!('BarcodeDetector' in window)) {
+      status('QR scan not supported in this browser; paste npub manually');
+      return;
+    }
+
+    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    scanVideo.srcObject = scanStream;
+    scanWrap.style.display = 'flex';
+    status('scanning QR...');
+
+    scanTimer = setInterval(async () => {
+      try {
+        const codes = await detector.detect(scanVideo);
+        if (!codes?.length) return;
+        const value = (codes[0].rawValue || '').trim();
+        if (value.startsWith('npub')) {
+          peerNpubEl.value = value;
+          stopQrScan();
+          status('QR scanned');
+        }
+      } catch {
+        // ignore transient detection errors
+      }
+    }, 300);
+  }
+
+  function stopQrScan() {
+    if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+    if (scanStream) {
+      for (const t of scanStream.getTracks()) t.stop();
+      scanStream = null;
+    }
+    scanVideo.srcObject = null;
+    scanWrap.style.display = 'none';
   }
 
   function connectSignal() {
@@ -191,6 +237,11 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   document.getElementById('copyNpub').onclick = async () => {
     await navigator.clipboard.writeText(myNpub);
     status('npub copied');
+  };
+
+  document.getElementById('scan').onclick = () => {
+    if (scanStream) stopQrScan();
+    else startQrScan().catch(e => status('scan error: ' + e.message));
   };
 
   document.getElementById('connect').onclick = connectSignal;
