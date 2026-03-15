@@ -46,7 +46,7 @@ function resolveSecretKey() {
 }
 
 function relaysFromEnv() {
-  const raw = process.env.NOSTR_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net';
+  const raw = process.env.NOSTR_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net,wss://nip17.tomdwyer.uk';
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
@@ -185,19 +185,20 @@ async function runClient(cfg) {
   const senderPubkey = getPublicKey(sk);
 
   const helloNonce = nonce();
-  const hello = { type: 'fips.udp.test.hello', nonce: helloNonce, want: 'udp-endpoint' };
-  const encryptedHello = await encryptDM(sk, serverPubkey, hello);
-  publishDM({ pool, relays, sk, senderPubkey, recipientPubkey: serverPubkey, content: encryptedHello });
 
-  const serverInfo = await new Promise((resolve, reject) => {
+  const serverInfo = await new Promise(async (resolve, reject) => {
     const started = Date.now();
-    const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
+    const since = Math.floor(Date.now() / 1000) - 120;
+    let timer;
+
+    const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since }, {
       onevent: async (evt) => {
         if (evt.pubkey !== serverPubkey) return;
         try {
           const msg = await decryptDM(sk, evt.pubkey, evt.content);
           if (msg?.type !== 'fips.udp.test.server-info') return;
           if (msg?.nonce !== helloNonce) return;
+          if (timer) clearInterval(timer);
           sub.close();
           resolve(msg);
         } catch {
@@ -206,7 +207,11 @@ async function runClient(cfg) {
       },
     });
 
-    const timer = setInterval(() => {
+    const hello = { type: 'fips.udp.test.hello', nonce: helloNonce, want: 'udp-endpoint' };
+    const encryptedHello = await encryptDM(sk, serverPubkey, hello);
+    publishDM({ pool, relays, sk, senderPubkey, recipientPubkey: serverPubkey, content: encryptedHello });
+
+    timer = setInterval(() => {
       if (Date.now() - started > cfg.waitMs) {
         clearInterval(timer);
         sub.close();

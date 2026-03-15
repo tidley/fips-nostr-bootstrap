@@ -40,7 +40,7 @@ npm run test:transport
 
 Set relays on both machines (optional, defaults are built in):
 ```bash
-export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net"
+export NOSTR_RELAYS="wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net,wss://nip17.tomdwyer.uk"
 ```
 
 Optional (if you want a fixed identity instead of auto-generated ephemeral key):
