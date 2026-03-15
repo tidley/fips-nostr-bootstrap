@@ -146,14 +146,32 @@ function parseJsonPacket(buf) {
 
 function startPunching({ socket, remote, punchNonce, startAtMs, intervalMs, durationMs, debugLog }) {
   let seq = 0;
+  let interval = null;
+  let stopTimer = null;
   const beginIn = Math.max(0, startAtMs - Date.now());
   debugLog?.('punch-schedule', { remote, startAtMs, beginIn, intervalMs, durationMs });
-  setTimeout(() => {
-    const timer = setInterval(() => {
-      socket.send(makeProbePacket(punchNonce, seq++), remote.port, remote.host);
+
+  const starter = setTimeout(() => {
+    interval = setInterval(() => {
+      try {
+        socket.send(makeProbePacket(punchNonce, seq++), remote.port, remote.host);
+      } catch {
+        // socket may have been closed; stop punching silently
+        if (interval) clearInterval(interval);
+      }
     }, intervalMs);
-    setTimeout(() => clearInterval(timer), durationMs);
+
+    stopTimer = setTimeout(() => {
+      if (interval) clearInterval(interval);
+      interval = null;
+    }, durationMs);
   }, beginIn);
+
+  return () => {
+    clearTimeout(starter);
+    if (interval) clearInterval(interval);
+    if (stopTimer) clearTimeout(stopTimer);
+  };
 }
 
 async function runServer(cfg) {
@@ -168,6 +186,7 @@ async function runServer(cfg) {
   const addr = socket.address();
   const advertiseHost = publicHostHint();
   const activePunch = new Map();
+  const stopPunchers = new Map();
 
   let pings = 0;
   socket.on('message', (msg, rinfo) => {
@@ -214,7 +233,7 @@ async function runServer(cfg) {
 
           const startAtMs = Date.now() + cfg.punchStartDelayMs;
           activePunch.set(msg.nonce, { established: false, remote: msg.clientEndpoint });
-          startPunching({
+          const stopPunch = startPunching({
             socket,
             remote: msg.clientEndpoint,
             punchNonce: msg.nonce,
@@ -223,6 +242,7 @@ async function runServer(cfg) {
             durationMs: cfg.punchDurationMs,
             debugLog,
           });
+          stopPunchers.set(msg.nonce, stopPunch);
 
           const reply = {
             type: 'fips.udp.test.server-info',
@@ -265,6 +285,8 @@ async function runServer(cfg) {
   process.on('SIGINT', () => {
     sub.close();
     pool.close(relays);
+    for (const stop of stopPunchers.values()) stop();
+    stopPunchers.clear();
     const report = { mode: 'server', pingsHandled: pings };
     console.log(JSON.stringify(report, null, 2));
     socket.close(() => process.exit(0));
@@ -360,7 +382,7 @@ async function runClient(cfg) {
     }, 250);
   });
 
-  startPunching({
+  const stopPunch = startPunching({
     socket,
     remote: serverInfo.endpoint,
     punchNonce: helloNonce,
@@ -421,6 +443,7 @@ async function runClient(cfg) {
   const totalBytes = cfg.rounds * (payload.length + 8) * 2;
   const throughputMbps = (totalBytes * 8) / (benchMs / 1000) / 1_000_000;
 
+  stopPunch();
   socket.close();
   pool.close(relays);
 
