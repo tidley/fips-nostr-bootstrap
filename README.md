@@ -25,38 +25,95 @@ Known caveats:
 
 ---
 
-## Fast demo (2 machines)
+## Shell commands: exact runbook
 
-Use same relay list on both sides (example), now auto-loaded from `.env` if present.
+All scripts auto-load `.env` from repo root.
 
-Create `.env` in repo root:
+### 0) One-time setup (both machines)
 
 ```bash
-NOSTR_NSEC=nsec1...
-NOSTR_RELAYS=wss://nos.lol
-# optional
-# FIPS_UDP_PUBLIC_HOST=...
+git clone https://github.com/tidley/fips-nostr-bootstrap.git
+cd fips-nostr-bootstrap
+npm install
 ```
 
-### 1) Start server (machine A)
+### 1) Create `.env` (both machines)
 
 ```bash
+cat > .env <<'EOF'
+NOSTR_RELAYS=wss://nos.lol
+# Optional fixed identity (recommended for stable npub):
+# NOSTR_NSEC=nsec1...
+# Optional endpoint override:
+# FIPS_UDP_PUBLIC_HOST=...
+EOF
+```
+
+---
+
+## Fast transport demo (NIP-17 + hole punch + duplex)
+
+### Server (machine A)
+
+```bash
+cd ~/fips-nostr-bootstrap
 node scripts/udp-transport-via-nostr.mjs --mode server --port 9999 --debug
 ```
 
-Copy printed `identity` (`npub...`).
+Copy `identity` (`npub...`).
 
-### 2) Start client (machine B)
+### Client (machine B)
 
 ```bash
+cd ~/fips-nostr-bootstrap
 node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --wait 60000 --debug
 ```
 
-If successful, final JSON includes:
+Success output includes:
 - `rendezvous.endpointDiscovered: true`
 - `punching.established: true`
-- `duplex.localSentBytes/localReceivedBytes` (~10MB)
-- latency and speed metrics
+- `duplex.localSentBytes/localReceivedBytes` (~10MB each way)
+
+---
+
+## Web console mode (SSH-like command/response)
+
+### Receiver shell server (machine A)
+
+```bash
+cd ~/fips-nostr-bootstrap
+node apps/fips-shell-server.mjs --udp-port 9999 --trusted-npubs "<WEB_UI_NPUB>"
+```
+
+### Web UI (machine B)
+
+```bash
+cd ~/fips-nostr-bootstrap
+node apps/fips-web-console.mjs --http-port 8787 --udp-port 0
+```
+
+Open `http://127.0.0.1:8787`, paste server npub, connect, then type commands.
+
+---
+
+## Terminal-native mode (recommended for htop/nano)
+
+### PTY server (machine A)
+
+```bash
+cd ~/fips-nostr-bootstrap
+node apps/fips-pty-server.mjs --udp-port 9999 --trusted-npubs "<CLIENT_NPUB>"
+```
+
+### PTY client (machine B)
+
+```bash
+cd ~/fips-nostr-bootstrap
+node apps/fips-pty-client.mjs --npub <SERVER_NPUB> --wait 60000
+```
+
+Exit PTY client with `Ctrl-]`.
+
 
 ---
 
