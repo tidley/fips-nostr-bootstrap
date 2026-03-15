@@ -151,7 +151,7 @@ async function runServer(cfg) {
     socket.send(pong, rinfo.port, rinfo.address);
   });
 
-  const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
+  const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 }, {
     onevent: async (evt) => {
       debugLog?.('recv-event', { id: evt.id, kind: evt.kind, pubkey: evt.pubkey });
       try {
@@ -216,7 +216,7 @@ async function runClient(cfg) {
 
   const serverInfo = await new Promise(async (resolve, reject) => {
     const started = Date.now();
-    const since = Math.floor(Date.now() / 1000) - 120;
+    const since = Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60;
     let timer;
 
     const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since }, {

@@ -63,6 +63,8 @@ node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --ro
 
 The client discovers endpoint info through encrypted Nostr DM handshake, then runs UDP latency/speed benchmark.
 
+(Implementation detail: NIP-17 gift-wrap events use randomized `created_at`, so subscriptions intentionally use a wider `since` window.)
+
 Outputs JSON including:
 - setup time (first successful probe RTT + setup duration)
 - RTT stats (avg/p50/p95/p99/min/max)
