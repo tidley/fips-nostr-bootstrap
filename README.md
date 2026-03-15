@@ -62,6 +62,9 @@ node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --ro
 
 # Optional hole-punch tuning
 # --retry-ms 5000 --punch-interval-ms 300 --punch-duration-ms 30000 --punch-start-delay-ms 3000
+
+# Optional duplex "video-call style" UDP simulation (simultaneous both ways)
+# --duplex-bytes 10485760 --duplex-chunk-bytes 1200 --duplex-interval-ms 0 --duplex-timeout-ms 90000
 ```
 
 The client discovers endpoint info through encrypted Nostr DM handshake, performs simultaneous UDP hole punching, then runs UDP latency/speed benchmark.

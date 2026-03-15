@@ -35,6 +35,10 @@ function parseArgs() {
     punchIntervalMs: 300,
     punchDurationMs: 30000,
     punchStartDelayMs: 3000,
+    duplexBytes: 10 * 1024 * 1024,
+    duplexChunkBytes: 1200,
+    duplexIntervalMs: 0,
+    duplexTimeoutMs: 90000,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -52,6 +56,10 @@ function parseArgs() {
     if (a === '--punch-interval-ms' && Number.isFinite(Number(v))) out.punchIntervalMs = Number(v);
     if (a === '--punch-duration-ms' && Number.isFinite(Number(v))) out.punchDurationMs = Number(v);
     if (a === '--punch-start-delay-ms' && Number.isFinite(Number(v))) out.punchStartDelayMs = Number(v);
+    if (a === '--duplex-bytes' && Number.isFinite(Number(v))) out.duplexBytes = Number(v);
+    if (a === '--duplex-chunk-bytes' && Number.isFinite(Number(v))) out.duplexChunkBytes = Number(v);
+    if (a === '--duplex-interval-ms' && Number.isFinite(Number(v))) out.duplexIntervalMs = Number(v);
+    if (a === '--duplex-timeout-ms' && Number.isFinite(Number(v))) out.duplexTimeoutMs = Number(v);
     if (a === '--show-endpoints') out.showEndpoints = true;
     if (a === '--debug') out.debug = true;
   }
@@ -136,6 +144,54 @@ function makeProbePacket(nonceValue, seq) {
 function makeProbeAckPacket(nonceValue) {
   return Buffer.from(JSON.stringify({ t: 'PROBE_ACK', n: nonceValue }));
 }
+function makeStreamStartPacket(nonceValue, totalBytes, chunkBytes, intervalMs) {
+  return Buffer.from(JSON.stringify({ t: 'STREAM_START', n: nonceValue, totalBytes, chunkBytes, intervalMs }));
+}
+function makeStreamDonePacket(nonceValue, sentBytes) {
+  return Buffer.from(JSON.stringify({ t: 'STREAM_DONE', n: nonceValue, sentBytes }));
+}
+function makeDataPacket(seq, payload) {
+  const h = Buffer.alloc(8);
+  h.write('DATA', 0, 4, 'utf8');
+  h.writeUInt32BE(seq, 4);
+  return Buffer.concat([h, payload]);
+}
+function isDataPacket(buf) {
+  return buf.length >= 8 && buf.subarray(0, 4).toString() === 'DATA';
+}
+
+function startDataSender({ socket, remote, nonceValue, totalBytes, chunkBytes, intervalMs, debugLog }) {
+  const payload = Buffer.alloc(Math.max(64, chunkBytes), 0x55);
+  let seq = 0;
+  let sentBytes = 0;
+
+  return new Promise((resolve) => {
+    const sendOne = () => {
+      if (sentBytes >= totalBytes) {
+        socket.send(makeStreamDonePacket(nonceValue, sentBytes), remote.port, remote.host);
+        debugLog?.('stream-sent-done', { nonce: nonceValue, sentBytes });
+        resolve(sentBytes);
+        return;
+      }
+
+      const remaining = totalBytes - sentBytes;
+      const thisSize = Math.min(payload.length, remaining);
+      const pkt = makeDataPacket(seq++, payload.subarray(0, thisSize));
+      try {
+        socket.send(pkt, remote.port, remote.host);
+        sentBytes += thisSize;
+      } catch {
+        resolve(sentBytes);
+        return;
+      }
+
+      if (intervalMs > 0) setTimeout(sendOne, intervalMs);
+      else setImmediate(sendOne);
+    };
+
+    sendOne();
+  });
+}
 function parseJsonPacket(buf) {
   try {
     return JSON.parse(buf.toString('utf8'));
@@ -187,6 +243,7 @@ async function runServer(cfg) {
   const advertiseHost = publicHostHint();
   const activePunch = new Map();
   const stopPunchers = new Map();
+  const streamStats = new Map();
 
   let pings = 0;
   socket.on('message', (msg, rinfo) => {
@@ -195,6 +252,11 @@ async function runServer(cfg) {
       pings += 1;
       const pong = Buffer.concat([Buffer.from('PONG'), msg.subarray(4)]);
       socket.send(pong, rinfo.port, rinfo.address);
+      return;
+    }
+
+    if (isDataPacket(msg)) {
+      for (const st of streamStats.values()) st.receivedBytes += msg.length - 8;
       return;
     }
 
@@ -217,6 +279,31 @@ async function runServer(cfg) {
       st.established = true;
       st.remote = { host: rinfo.address, port: rinfo.port };
       activePunch.set(pkt.n, st);
+      return;
+    }
+
+    if (pkt.t === 'STREAM_START') {
+      debugLog?.('stream-start-recv', { nonce: pkt.n, from: `${rinfo.address}:${rinfo.port}`, totalBytes: pkt.totalBytes });
+      const st = { receivedBytes: 0, remoteDone: false, remoteSentBytes: 0 };
+      streamStats.set(pkt.n, st);
+      startDataSender({
+        socket,
+        remote: { host: rinfo.address, port: rinfo.port },
+        nonceValue: pkt.n,
+        totalBytes: pkt.totalBytes,
+        chunkBytes: pkt.chunkBytes,
+        intervalMs: pkt.intervalMs,
+        debugLog,
+      });
+      return;
+    }
+
+    if (pkt.t === 'STREAM_DONE') {
+      const st = streamStats.get(pkt.n) || { receivedBytes: 0, remoteDone: false, remoteSentBytes: 0 };
+      st.remoteDone = true;
+      st.remoteSentBytes = pkt.sentBytes || 0;
+      streamStats.set(pkt.n, st);
+      debugLog?.('stream-done-recv', { nonce: pkt.n, remoteSentBytes: st.remoteSentBytes, receivedBytes: st.receivedBytes });
     }
   });
 
@@ -305,15 +392,25 @@ async function runClient(cfg) {
   const pool = createPoolWithAuth(sk, debugLog);
   const senderPubkey = getPublicKey(sk);
 
+  const helloNonce = nonce();
+
   const socket = dgram.createSocket('udp4');
   await bindSocket(socket, '0.0.0.0', 0);
   const localAddr = socket.address();
   const clientCandidate = { host: publicHostHint(), port: localAddr.port };
 
   const punchState = { established: false, remote: null, nonce: null };
+  const duplexState = { nonce: helloNonce, receivedBytes: 0, remoteDone: false, remoteSentBytes: 0 };
+
   socket.on('message', (msg, rinfo) => {
     const txt = msg.subarray(0, 4).toString();
     if (txt === 'PONG') return;
+
+    if (isDataPacket(msg)) {
+      duplexState.receivedBytes += msg.length - 8;
+      return;
+    }
+
     const pkt = parseJsonPacket(msg);
     if (!pkt?.t || !pkt?.n) return;
     if (pkt.t === 'PROBE') {
@@ -322,16 +419,21 @@ async function runClient(cfg) {
       punchState.established = true;
       punchState.remote = { host: rinfo.address, port: rinfo.port };
       punchState.nonce = pkt.n;
+      return;
     }
     if (pkt.t === 'PROBE_ACK') {
       debugLog?.('punch-ack-recv', { from: `${rinfo.address}:${rinfo.port}`, nonce: pkt.n });
       punchState.established = true;
       punchState.remote = { host: rinfo.address, port: rinfo.port };
       punchState.nonce = pkt.n;
+      return;
+    }
+    if (pkt.t === 'STREAM_DONE' && pkt.n === duplexState.nonce) {
+      duplexState.remoteDone = true;
+      duplexState.remoteSentBytes = pkt.sentBytes || 0;
+      debugLog?.('stream-done-recv', { nonce: pkt.n, remoteSentBytes: duplexState.remoteSentBytes, receivedBytes: duplexState.receivedBytes });
     }
   });
-
-  const helloNonce = nonce();
 
   const serverInfo = await new Promise(async (resolve, reject) => {
     const started = Date.now();
@@ -400,6 +502,26 @@ async function runClient(cfg) {
   const target = punchState.remote || serverInfo.endpoint;
   if (!punchState.established) debugLog?.('punch-not-established', { fallbackTarget: target });
 
+  // Duplex ~video-call style stream: both peers send at same time
+  const duplexStart = Date.now();
+  socket.send(makeStreamStartPacket(helloNonce, cfg.duplexBytes, cfg.duplexChunkBytes, cfg.duplexIntervalMs), target.port, target.host);
+  const localDuplexSentPromise = startDataSender({
+    socket,
+    remote: target,
+    nonceValue: helloNonce,
+    totalBytes: cfg.duplexBytes,
+    chunkBytes: cfg.duplexChunkBytes,
+    intervalMs: cfg.duplexIntervalMs,
+    debugLog,
+  });
+  const localDuplexSent = await localDuplexSentPromise;
+
+  const duplexWaitStart = Date.now();
+  while (!duplexState.remoteDone && Date.now() - duplexWaitStart < cfg.duplexTimeoutMs) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  const duplexDurationMs = Date.now() - duplexStart;
+
   const payload = Buffer.alloc(Math.max(1, cfg.payloadBytes), 0x61);
   const rtts = [];
   let seq = 0;
@@ -462,6 +584,16 @@ async function runClient(cfg) {
           ? { local: `${localAddr.address}:${localAddr.port}`, remote: `${target.host}:${target.port}` }
           : { local: '[hidden]', remote: '[hidden-discovered-via-dm]' },
         setup: { firstProbeRttMs: Number(firstRtt.toFixed(3)), setupTimeMs: Number(setupMs.toFixed(3)) },
+        duplex: {
+          requestedBytesEachWay: cfg.duplexBytes,
+          localSentBytes: localDuplexSent,
+          remoteSentBytes: duplexState.remoteSentBytes,
+          localReceivedBytes: duplexState.receivedBytes,
+          remoteDone: duplexState.remoteDone,
+          durationMs: duplexDurationMs,
+          localSendMbps: Number(((localDuplexSent * 8) / (duplexDurationMs / 1000) / 1_000_000).toFixed(3)),
+          localReceiveMbps: Number(((duplexState.receivedBytes * 8) / (duplexDurationMs / 1000) / 1_000_000).toFixed(3)),
+        },
         latency: {
           avgRttMs: Number(mean(rtts).toFixed(3)),
           p50RttMs: Number(percentile(rtts, 50).toFixed(3)),
