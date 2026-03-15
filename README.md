@@ -176,7 +176,8 @@ Notes:
 - Video signaling now uses NIP-17 DMs over relays (no local ws signaling path).
 - Uses WebRTC + public STUN for media path traversal.
 - Includes mic mute/unmute and speaker mute/unmute.
-- Dark UI with stats: RTT, bytes, throughput, ICE candidates, IPv6 hints.
+- Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
+- Local preview is smaller; remote video is larger.
 - Prototype quality: no auth hardening/recording yet.
 
 ## SSH-like demos

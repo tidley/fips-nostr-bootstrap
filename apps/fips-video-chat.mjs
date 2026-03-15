@@ -23,7 +23,8 @@ const html = `<!doctype html>
     input, button { padding: 8px; font-size: 14px; background:#1b2129; color:#dbe2ea; border:1px solid #3a4655; border-radius:8px; }
     input { flex: 1; }
     button { cursor:pointer; }
-    video { width: 48%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
+    #localVideo { width: 28%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
+    #remoteVideo { width: 68%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
     #status { color: #9fb2c7; font-size: 13px; }
     #myNpub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; color:#c5d7ea }
     #qr { width: 170px; height: 170px; border: 1px solid #2f3946; border-radius: 8px; background:#fff; }
@@ -68,14 +69,14 @@ const html = `<!doctype html>
 
   <p id="status">Status: idle</p>
 
-  <div class="panel">
-    <strong>Stats</strong>
-    <div id="stats">collecting...</div>
-  </div>
-
   <div class="row">
     <video id="localVideo" autoplay playsinline muted></video>
     <video id="remoteVideo" autoplay playsinline></video>
+  </div>
+
+  <div class="panel">
+    <strong>Stats</strong>
+    <div id="stats">collecting...</div>
   </div>
 
 <script type="module">
@@ -257,6 +258,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const downMbps = (((bytesReceived - lastBytes.recv) * 8) / dt / 1_000_000).toFixed(3);
     lastBytes = { sent: bytesSent, recv: bytesReceived, ts: now };
 
+    const sentMB = (bytesSent / (1024 * 1024)).toFixed(2);
+    const recvMB = (bytesReceived / (1024 * 1024)).toFixed(2);
+
     const localIp = localCand?.address || localCand?.ip || 'n/a';
     const remoteIp = remoteCand?.address || remoteCand?.ip || 'n/a';
 
@@ -265,8 +269,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       'iceConnectionState: ' + pc.iceConnectionState,
       'peerReachable: ' + peerReachable,
       'rttMs: ' + (rttMs ?? 'n/a'),
-      'bytesSent: ' + bytesSent,
-      'bytesReceived: ' + bytesReceived,
+      'sentMB: ' + sentMB,
+      'receivedMB: ' + recvMB,
       'upMbps(now): ' + upMbps,
       'downMbps(now): ' + downMbps,
       'localCandidate: ' + localIp,
