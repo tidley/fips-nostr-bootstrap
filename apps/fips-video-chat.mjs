@@ -8,7 +8,7 @@ function arg(name, fallback = '') {
 }
 
 const port = Number(arg('--port', '8088'));
-const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
+const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk').split(',').map((s) => s.trim()).filter(Boolean);
 
 const html = `<!doctype html>
 <html>

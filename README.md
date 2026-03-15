@@ -41,7 +41,7 @@ npm install
 
 ```bash
 cat > .env <<'EOF'
-NOSTR_RELAYS=wss://nos.lol
+NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk
 # Optional fixed identity (recommended for stable npub):
 # NOSTR_NSEC=nsec1...
 # Optional endpoint override:
