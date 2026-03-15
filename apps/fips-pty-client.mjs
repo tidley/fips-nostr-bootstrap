@@ -17,7 +17,12 @@ if (!targetNpub) {
 const waitMs = Number(arg('--wait', '60000'));
 const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
 
-const node = createFipsNostrRendezvousNode({ udpPort: 0, relays, publicHost: process.env.FIPS_UDP_PUBLIC_HOST });
+const node = createFipsNostrRendezvousNode({
+  udpPort: 0,
+  relays,
+  nsec: process.env.NOSTR_NSEC,
+  publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
+});
 const started = await node.start();
 
 console.error('[local npub]', started.npub);

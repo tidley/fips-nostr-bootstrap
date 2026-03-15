@@ -13,7 +13,12 @@ const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
 const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
 
-const node = createFipsNostrRendezvousNode({ udpPort, relays, publicHost: process.env.FIPS_UDP_PUBLIC_HOST });
+const node = createFipsNostrRendezvousNode({
+  udpPort,
+  relays,
+  nsec: process.env.NOSTR_NSEC,
+  publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
+});
 const started = await node.start();
 
 let active = null;

@@ -16,6 +16,7 @@ const node = createFipsNostrRendezvousNode({
   udpPort,
   relays,
   trustedNpubs: trusted,
+  nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
 });
 
