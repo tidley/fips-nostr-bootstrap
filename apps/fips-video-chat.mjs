@@ -47,7 +47,7 @@ const html = `<!doctype html>
     .videoStage { position:relative; border-radius:22px; overflow:hidden; background:#111; min-height:56vh; border:1px solid #3c4043; }
     #remoteVideo { width:100%; height:100%; object-fit:contain; background:#111; }
     .remote-landscape #remoteVideo { object-fit:contain; }
-    .remote-portrait #remoteVideo { object-fit:cover; }
+    .remote-portrait #remoteVideo { object-fit:contain; }
     #localVideo { position:absolute; right:16px; top:16px; width:22%; min-width:160px; max-width:280px; border-radius:12px; border:1px solid #3c4043; background:#000; object-fit:cover; }
     .overlayStatus { position:absolute; left:14px; top:14px; padding:8px 10px; border-radius:12px; background:rgba(32,33,36,.72); font-size:12px; color:#d2d7dc; backdrop-filter: blur(6px); }
 
@@ -67,7 +67,7 @@ const html = `<!doctype html>
     dialog { border:1px solid #3c4043; border-radius:14px; background:#2b2c2f; color:#e8eaed; max-width:520px; width:92vw; }
     @media (max-width: 860px) {
       .precall { grid-template-columns: 1fr; }
-      #localVideo { width:30%; right:8px; top:8px; }
+      #localVideo { width:15%; min-width:96px; right:8px; top:8px; }
       .controls { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
     }
   </style>
