@@ -114,6 +114,11 @@ Open `http://127.0.0.1:8787`, paste server npub, connect.
 - `apps/fips-pty-server.mjs` (server-side PTY)
 - `apps/fips-pty-client.mjs` (local terminal client)
 
+### C) Android wrapper app (Termux launcher)
+
+- `android/fips-termux-wrapper`
+- Small native UI that launches the Termux Node client (`apps/fips-pty-client.mjs`) with entered npub.
+
 Server (machine B):
 
 ```bash
