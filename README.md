@@ -150,12 +150,18 @@ This is the reusable library layer for trusted-npub rendezvous + punch establish
 
 ---
 
-## Simple web video chat demo
+## Simple web video chat demo (static / GitHub Pages friendly)
 
-A lightweight browser-to-browser video call demo is included:
+A lightweight browser-to-browser video call demo is included as a static page:
+
+- `docs/video-chat/index.html`
+
+Run locally with any static file server:
 
 ```bash
-node apps/fips-video-chat.mjs --port 8088
+cd docs/video-chat
+python3 -m http.server 8088
+# then open http://127.0.0.1:8088
 ```
 
 Open the page on both devices (same URL). Each browser tab creates an **ephemeral npub**, listens on relays for NIP-17 messages, and shows a QR.
@@ -176,6 +182,11 @@ Identity notes:
 - Default is ephemeral npub per browser tab.
 - You can optionally switch to a user-provided `nsec` via the UI (`Use nsec`).
 - `nsec` is stored in sessionStorage for that browser session.
+
+Relay config notes (client-side):
+- Default relay list is embedded in `docs/video-chat/index.html`.
+- Override relays with querystring: `?relays=wss://relay1,wss://relay2`
+- Or set `window.FIPS_VIDEO_RELAYS = ['wss://relay1', 'wss://relay2']` before app init.
 
 QR notes:
 - QR image is generated client-side.
