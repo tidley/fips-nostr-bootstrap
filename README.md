@@ -58,7 +58,7 @@ Server prints its generated/loaded `npub` (copy this to client).
 
 On **client machine**:
 ```bash
-node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 500 --payload 256 --warmup 30 --timeout 3000 --debug
+node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --rounds 10 --payload 256 --warmup 3 --timeout 3000 --debug
 
 # Optional hole-punch tuning
 # --retry-ms 5000 --punch-interval-ms 300 --punch-duration-ms 30000 --punch-start-delay-ms 3000

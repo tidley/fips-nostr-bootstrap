@@ -24,7 +24,7 @@ function parseArgs() {
     npub: '',
     port: 9999,
     host: '0.0.0.0',
-    rounds: 200,
+    rounds: 10,
     payloadBytes: 64,
     warmup: 20,
     timeoutMs: 3000,
