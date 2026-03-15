@@ -2,7 +2,8 @@
 import dgram from 'node:dgram';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip04, nip19 } from 'nostr-tools';
+import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -85,27 +86,20 @@ async function bindSocket(socket, host, port) {
   });
 }
 
-async function encryptDM(sk, recipientPubkey, obj) {
-  return await nip04.encrypt(sk, recipientPubkey, JSON.stringify(obj));
+function publishDM({ pool, relays, sk, recipientPubkey, obj }) {
+  const event = wrapEvent(sk, { publicKey: recipientPubkey }, JSON.stringify(obj));
+  const pubs = pool.publish(relays, event);
+  Promise.allSettled(pubs).catch(() => {
+    // swallow relay write errors; rendezvous retries handle transient failures
+  });
 }
 
-async function decryptDM(sk, senderPubkey, content) {
-  const text = await nip04.decrypt(sk, senderPubkey, content);
-  return JSON.parse(text);
-}
-
-function publishDM({ pool, relays, sk, senderPubkey, recipientPubkey, content }) {
-  const event = finalizeEvent(
-    {
-      kind: 4,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['p', recipientPubkey]],
-      content,
-      pubkey: senderPubkey,
-    },
-    sk,
-  );
-  pool.publish(relays, event);
+function parseIncomingNip17(event, recipientSk) {
+  const rumor = unwrapEvent(event, recipientSk);
+  return {
+    senderPubkey: rumor.pubkey,
+    message: JSON.parse(rumor.content),
+  };
 }
 
 async function runServer(cfg) {
@@ -127,10 +121,10 @@ async function runServer(cfg) {
     socket.send(pong, rinfo.port, rinfo.address);
   });
 
-  const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
+  const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since: Math.floor(Date.now() / 1000) }, {
     onevent: async (evt) => {
       try {
-        const msg = await decryptDM(sk, evt.pubkey, evt.content);
+        const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
         if (msg?.type !== 'fips.udp.test.hello' || !msg?.nonce) return;
 
         const reply = {
@@ -140,8 +134,7 @@ async function runServer(cfg) {
           issuedAt: Date.now(),
         };
 
-        const encrypted = await encryptDM(sk, evt.pubkey, reply);
-        publishDM({ pool, relays, sk, senderPubkey, recipientPubkey: evt.pubkey, content: encrypted });
+        publishDM({ pool, relays, sk, recipientPubkey: fromPubkey, obj: reply });
       } catch {
         // ignore malformed/incompatible DM
       }
@@ -191,11 +184,11 @@ async function runClient(cfg) {
     const since = Math.floor(Date.now() / 1000) - 120;
     let timer;
 
-    const sub = pool.subscribeMany(relays, { kinds: [4], '#p': [senderPubkey], since }, {
+    const sub = pool.subscribeMany(relays, { kinds: [1059], '#p': [senderPubkey], since }, {
       onevent: async (evt) => {
-        if (evt.pubkey !== serverPubkey) return;
         try {
-          const msg = await decryptDM(sk, evt.pubkey, evt.content);
+          const { senderPubkey: fromPubkey, message: msg } = parseIncomingNip17(evt, sk);
+          if (fromPubkey !== serverPubkey) return;
           if (msg?.type !== 'fips.udp.test.server-info') return;
           if (msg?.nonce !== helloNonce) return;
           if (timer) clearInterval(timer);
@@ -208,14 +201,22 @@ async function runClient(cfg) {
     });
 
     const hello = { type: 'fips.udp.test.hello', nonce: helloNonce, want: 'udp-endpoint' };
-    const encryptedHello = await encryptDM(sk, serverPubkey, hello);
-    publishDM({ pool, relays, sk, senderPubkey, recipientPubkey: serverPubkey, content: encryptedHello });
+    publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello });
 
+    const republishEveryMs = 7000;
+    let nextRepublishAt = Date.now() + republishEveryMs;
     timer = setInterval(() => {
-      if (Date.now() - started > cfg.waitMs) {
+      const now = Date.now();
+      if (now - started > cfg.waitMs) {
         clearInterval(timer);
         sub.close();
         reject(new Error('timed out waiting for server-info DM'));
+        return;
+      }
+
+      if (now >= nextRepublishAt) {
+        publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello });
+        nextRepublishAt = now + republishEveryMs;
       }
     }, 250);
   });
