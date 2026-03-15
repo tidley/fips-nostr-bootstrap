@@ -63,6 +63,7 @@ const html = `<!doctype html>
   <div class="row">
     <button id="cam">Start camera+mic</button>
     <button id="call">Call</button>
+    <button id="end">End call</button>
     <button id="mute">Mute mic</button>
     <button id="speaker">Mute speaker</button>
   </div>
@@ -120,6 +121,10 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let scanTimer = null;
   let statsTimer = null;
   let lastBytes = { sent: 0, recv: 0, ts: Date.now() };
+  let selectedPathReason = 'n/a';
+  let callStartedAt = 0;
+  const localCandidates = [];
+  const remoteCandidates = [];
   const pendingRequests = new Map();
   const allowedPeers = new Set();
 
@@ -131,9 +136,69 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     return d.data;
   }
 
+  function isPrivateIPv4(ip) {
+    return /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip);
+  }
+
+  function isLocalIPv6(ip) {
+    return ip.startsWith('fd') || ip.startsWith('fc') || ip.startsWith('fe80:');
+  }
+
+  function parseCandidate(raw) {
+    const parts = String(raw || '').split(' ');
+    // candidate:foundation component protocol priority ip port typ type ...
+    if (parts.length < 8) return null;
+    return {
+      protocol: parts[2],
+      ip: parts[4],
+      port: Number(parts[5]),
+      type: parts[7],
+    };
+  }
+
+  function candidateScore(c) {
+    if (!c) return 0;
+    const ip = c.ip || '';
+    if (ip.includes(':') && isLocalIPv6(ip)) return 500;
+    if (!ip.includes(':') && isPrivateIPv4(ip)) return 400;
+    if (c.type === 'host') return 300;
+    if (c.type === 'srflx') return 200;
+    if (c.type === 'relay') return 100;
+    return 50;
+  }
+
+  function bloomHex(list) {
+    let bits = 0n;
+    for (const c of list) {
+      const s = String(c.ip) + ':' + String(c.port) + ':' + String(c.type);
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+      bits |= 1n << BigInt(h % 64);
+    }
+    return bits.toString(16).padStart(16, '0');
+  }
+
+  function sameLan(a, b) {
+    if (!a || !b) return false;
+    if (a.includes(':') || b.includes(':')) return isLocalIPv6(a) && isLocalIPv6(b);
+    const aa = a.split('.');
+    const bb = b.split('.');
+    return aa.length === 4 && bb.length === 4 && aa[0] === bb[0] && aa[1] === bb[1] && aa[2] === bb[2];
+  }
+
   function sendNip17(toPubkey, body) {
     const event = wrapEvent(sk, { publicKey: toPubkey }, JSON.stringify({ app: APP, ...body }));
     Promise.allSettled(pool.publish(RELAYS, event)).catch(() => undefined);
+  }
+
+  function sendCandidateSnapshot() {
+    if (!peerPubkey) return;
+    sendNip17(peerPubkey, {
+      type: 'fips_candidates',
+      candidates: localCandidates,
+      bloom: bloomHex(localCandidates),
+      ts: Date.now(),
+    });
   }
 
   function renderIncoming() {
@@ -198,8 +263,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (!allowedPeers.has(fromPubkey)) return;
 
+          if (msg.type === 'fips_candidates') {
+            remoteCandidates.length = 0;
+            if (Array.isArray(msg.candidates)) {
+              for (const c of msg.candidates) remoteCandidates.push(c);
+            }
+            return;
+          }
+
           if (msg.type === 'offer') {
             const p = ensurePeer();
+            callStartedAt = Date.now();
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
             const answer = await p.createAnswer();
             await p.setLocalDescription(answer);
@@ -264,10 +338,23 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const localIp = localCand?.address || localCand?.ip || 'n/a';
     const remoteIp = remoteCand?.address || remoteCand?.ip || 'n/a';
 
+    if (localIp !== 'n/a' && remoteIp !== 'n/a') {
+      if (sameLan(localIp, remoteIp)) {
+        selectedPathReason = 'LAN match via bloom hit';
+      } else if (localIp.includes(':') && remoteIp.includes(':')) {
+        selectedPathReason = 'IPv6 preferred path';
+      } else {
+        selectedPathReason = 'broader-path fallback';
+      }
+    }
+
     statsEl.textContent = [
       'connectionState: ' + pc.connectionState,
       'iceConnectionState: ' + pc.iceConnectionState,
       'peerReachable: ' + peerReachable,
+      'selectedPathReason: ' + selectedPathReason,
+      'localBloom: ' + bloomHex(localCandidates),
+      'remoteBloom: ' + bloomHex(remoteCandidates),
       'rttMs: ' + (rttMs ?? 'n/a'),
       'sentMB: ' + sentMB,
       'receivedMB: ' + recvMB,
@@ -291,7 +378,24 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     startStatsLoop();
 
     pc.onicecandidate = (e) => {
-      if (e.candidate && peerPubkey) sendNip17(peerPubkey, { type: 'ice', candidate: e.candidate });
+      if (!e.candidate || !peerPubkey) return;
+
+      const parsed = parseCandidate(e.candidate.candidate);
+      if (parsed) {
+        const exists = localCandidates.some((c) => c.ip === parsed.ip && c.port === parsed.port && c.type === parsed.type);
+        if (!exists) {
+          localCandidates.push(parsed);
+          localCandidates.sort((a, b) => candidateScore(b) - candidateScore(a));
+          sendCandidateSnapshot();
+        }
+      }
+
+      const sendIce = () => sendNip17(peerPubkey, { type: 'ice', candidate: e.candidate });
+      const isPreferredLocal = parsed && (isPrivateIPv4(parsed.ip) || isLocalIPv6(parsed.ip) || parsed.type === 'host');
+
+      // Force preferred LAN/local candidates first for ~1.5s, then broaden
+      if (isPreferredLocal || Date.now() - callStartedAt > 1500) sendIce();
+      else setTimeout(sendIce, 1500);
     };
 
     pc.ontrack = (e) => {
@@ -320,10 +424,26 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (!peerPubkey) return status('no accepted peer');
     if (!peerReachable) return status('peer not accepted yet');
     const p = ensurePeer();
+    callStartedAt = Date.now();
     const offer = await p.createOffer();
     await p.setLocalDescription(offer);
     sendNip17(peerPubkey, { type: 'offer', sdp: offer });
     status('offer sent');
+  }
+
+  function endCall() {
+    if (pc) {
+      pc.getSenders().forEach((s) => { try { pc.removeTrack(s); } catch {} });
+      pc.close();
+      pc = null;
+    }
+    remoteVideo.srcObject = null;
+    selectedPathReason = 'n/a';
+    localCandidates.length = 0;
+    remoteCandidates.length = 0;
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+    statsEl.textContent = 'call ended';
+    status('call ended');
   }
 
   async function startQrScan() {
@@ -401,6 +521,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   document.getElementById('request').onclick = sendRequest;
   document.getElementById('cam').onclick = () => startCamera().catch((e) => status('camera error: ' + e.message));
   document.getElementById('call').onclick = () => startCall().catch((e) => status('call error: ' + e.message));
+  document.getElementById('end').onclick = endCall;
   document.getElementById('mute').onclick = () => {
     if (!localStream) return;
     micMuted = !micMuted;

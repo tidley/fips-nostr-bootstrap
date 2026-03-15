@@ -166,6 +166,7 @@ Flow:
 3. Receiver sees incoming request and clicks **Accept**.
 4. Click **Start camera+mic** on both.
 5. One side clicks **Call**.
+6. Use **End call** to tear down the peer connection.
 
 QR notes:
 - QR image is generated client-side.
@@ -175,8 +176,9 @@ QR notes:
 Notes:
 - Video signaling now uses NIP-17 DMs over relays (no local ws signaling path).
 - Uses WebRTC + public STUN for media path traversal.
-- Includes mic mute/unmute and speaker mute/unmute.
+- Includes mic mute/unmute, speaker mute/unmute, and End call.
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
+- FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
 - Local preview is smaller; remote video is larger.
 - Prototype quality: no auth hardening/recording yet.
 
