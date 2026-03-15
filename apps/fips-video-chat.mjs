@@ -81,6 +81,7 @@ const html = `<!doctype html>
 <script type="module">
 import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-tools@2.17.0';
 import jsQR from 'https://esm.sh/jsqr@1.4.0';
+import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
 (() => {
   const statusEl = document.getElementById('status');
@@ -100,7 +101,9 @@ import jsQR from 'https://esm.sh/jsqr@1.4.0';
   const myNpub = nip19.npubEncode(pub);
 
   myNpubEl.textContent = myNpub;
-  qrEl.src = 'https://api.qrserver.com/v1/create-qr-code/?size=170x170&data=' + encodeURIComponent(myNpub);
+  QRCode.toDataURL(myNpub, { width: 170, margin: 1 })
+    .then((url) => { qrEl.src = url; })
+    .catch(() => { qrEl.alt = 'QR failed to render'; });
 
   let ws = null;
   let localStream = null;

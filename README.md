@@ -168,8 +168,9 @@ Flow:
 5. Click **Start camera+mic** on both.
 6. One side clicks **Call**.
 
-QR scan notes:
-- Uses native `BarcodeDetector` when available.
+QR notes:
+- QR image is now generated client-side (no external QR image API).
+- Scanning uses native `BarcodeDetector` when available.
 - Falls back to in-browser `jsQR` decoding for broader browser/device support.
 
 Notes:
