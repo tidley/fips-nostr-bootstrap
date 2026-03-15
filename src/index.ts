@@ -10,3 +10,4 @@ export * from './fallback.js';
 export * from './metrics.js';
 export * from './test_harness.js';
 export * from './demoEngine.js';
+export * from './rendezvous_nip17.js';
