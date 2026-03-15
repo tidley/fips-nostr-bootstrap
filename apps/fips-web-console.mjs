@@ -124,8 +124,8 @@ es.addEventListener('result', ev => {
   if (d.id && seen.has(d.id)) return;
   if (d.id) seen.add(d.id);
   if (d.cwd) { cwd = d.cwd; prompt = 'fips@peer:' + cwd + '$ '; }
-  if (d.stdout) writeLine(d.stdout.replace(/\n$/,''));
-  if (d.stderr) writeLine('[stderr] ' + d.stderr.replace(/\n$/,''));
+  if (d.stdout) writeLine(d.stdout.replace(/\\n$/,''));
+  if (d.stderr) writeLine('[stderr] ' + d.stderr.replace(/\\n$/,''));
   if (!d.ok) writeLine('[exit ' + (d.code ?? 1) + '] ' + (d.error || 'error'));
   setPrompt();
   cmdInFlight = false;
