@@ -80,6 +80,7 @@ const html = `<!doctype html>
 
 <script type="module">
 import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-tools@2.17.0';
+import jsQR from 'https://esm.sh/jsqr@1.4.0';
 
 (() => {
   const statusEl = document.getElementById('status');
@@ -264,22 +265,33 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
   }
 
   async function startQrScan() {
-    if (!('BarcodeDetector' in window)) {
-      status('QR scan not supported in this browser; paste npub manually');
-      return;
-    }
-
-    const detector = new BarcodeDetector({ formats: ['qr_code'] });
     scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
     scanVideo.srcObject = scanStream;
     scanWrap.style.display = 'flex';
     status('scanning QR...');
 
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const hasNative = 'BarcodeDetector' in window;
+    const detector = hasNative ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+
     scanTimer = setInterval(async () => {
       try {
-        const codes = await detector.detect(scanVideo);
-        if (!codes?.length) return;
-        const value = (codes[0].rawValue || '').trim();
+        if (scanVideo.videoWidth < 20 || scanVideo.videoHeight < 20) return;
+
+        let value = '';
+        if (detector) {
+          const codes = await detector.detect(scanVideo);
+          if (codes?.length) value = (codes[0].rawValue || '').trim();
+        } else {
+          canvas.width = scanVideo.videoWidth;
+          canvas.height = scanVideo.videoHeight;
+          ctx.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(img.data, img.width, img.height);
+          if (code?.data) value = String(code.data).trim();
+        }
+
         if (value.startsWith('npub')) {
           peerNpubEl.value = value;
           stopQrScan();
@@ -288,7 +300,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-too
       } catch {
         // ignore transient detection errors
       }
-    }, 300);
+    }, 250);
   }
 
   function stopQrScan() {
@@ -411,6 +423,7 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 const peers = new Map(); // npub -> ws
+const pendingByTarget = new Map(); // npub -> [message]
 
 function send(ws, obj) {
   if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
@@ -432,15 +445,27 @@ wss.on('connection', (ws) => {
             send(ws, { type: 'peer-online', npub });
           }
         }
+
+        const pending = pendingByTarget.get(myNpub);
+        if (pending?.length) {
+          for (const p of pending) send(ws, p);
+          pendingByTarget.delete(myNpub);
+        }
         return;
       }
 
       if (!myNpub || !msg.to) return;
+      const forwarded = { ...msg, from: myNpub };
       const toWs = peers.get(msg.to);
-      if (!toWs) return;
 
       if (['offer', 'answer', 'ice', 'probe', 'probe_ack'].includes(msg.type)) {
-        send(toWs, { ...msg, from: myNpub });
+        if (toWs) {
+          send(toWs, forwarded);
+        } else if (msg.type === 'probe') {
+          const arr = pendingByTarget.get(msg.to) || [];
+          arr.push(forwarded);
+          pendingByTarget.set(msg.to, arr.slice(-20));
+        }
       }
     } catch {
       // ignore malformed messages
