@@ -32,8 +32,10 @@ const html = `<!doctype html>
     <button id="join">Join</button>
   </div>
   <div class="row">
-    <button id="cam">Start camera</button>
+    <button id="cam">Start camera+mic</button>
     <button id="call">Call</button>
+    <button id="mute">Mute mic</button>
+    <button id="speaker">Mute speaker</button>
   </div>
   <p id="status">Status: idle</p>
   <div class="row">
@@ -52,6 +54,8 @@ const html = `<!doctype html>
   let room = null;
   let localStream = null;
   let pc = null;
+  let micMuted = false;
+  let speakerMuted = false;
 
   function status(s) { statusEl.textContent = 'Status: ' + s; }
 
@@ -82,9 +86,12 @@ const html = `<!doctype html>
   }
 
   async function startCamera() {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
     localVideo.srcObject = localStream;
-    status('camera started');
+    status('camera+mic started');
     if (pc) {
       for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
     }
@@ -144,6 +151,19 @@ const html = `<!doctype html>
   document.getElementById('join').onclick = joinRoom;
   document.getElementById('cam').onclick = () => startCamera().catch(e => status('camera error: ' + e.message));
   document.getElementById('call').onclick = () => startCall().catch(e => status('call error: ' + e.message));
+  document.getElementById('mute').onclick = () => {
+    if (!localStream) return;
+    micMuted = !micMuted;
+    for (const t of localStream.getAudioTracks()) t.enabled = !micMuted;
+    document.getElementById('mute').textContent = micMuted ? 'Unmute mic' : 'Mute mic';
+    status(micMuted ? 'mic muted' : 'mic unmuted');
+  };
+  document.getElementById('speaker').onclick = () => {
+    speakerMuted = !speakerMuted;
+    remoteVideo.muted = speakerMuted;
+    document.getElementById('speaker').textContent = speakerMuted ? 'Unmute speaker' : 'Mute speaker';
+    status(speakerMuted ? 'speaker muted' : 'speaker unmuted');
+  };
 })();
 </script>
 </body>

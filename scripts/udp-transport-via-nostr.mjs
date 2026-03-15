@@ -89,16 +89,52 @@ function createPoolWithAuth(sk, debugLog) {
   });
 }
 
-function publicHostHint() {
-  if (process.env.FIPS_UDP_PUBLIC_HOST) return process.env.FIPS_UDP_PUBLIC_HOST;
+function getLocalCandidates() {
+  const out = [];
   const ifaces = os.networkInterfaces();
-  for (const list of Object.values(ifaces)) {
+  for (const [ifname, list] of Object.entries(ifaces)) {
     if (!list) continue;
     for (const addr of list) {
-      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+      if (addr.internal) continue;
+      if (addr.family === 'IPv4' || addr.family === 'IPv6') {
+        out.push({ host: addr.address, family: addr.family, ifname });
+      }
     }
   }
-  return '127.0.0.1';
+  return out;
+}
+
+function publicHostHint() {
+  if (process.env.FIPS_UDP_PUBLIC_HOST) return process.env.FIPS_UDP_PUBLIC_HOST;
+  const candidates = getLocalCandidates();
+  const v4 = candidates.find((c) => c.family === 'IPv4');
+  return v4?.host || '127.0.0.1';
+}
+
+function buildBloomHint(candidates) {
+  // lightweight placeholder bloom-style bitset from candidate strings
+  let bits = 0n;
+  for (const c of candidates) {
+    const s = `${c.family}:${c.host}`;
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    const idx = BigInt(h % 64);
+    bits |= 1n << idx;
+  }
+  return bits.toString(16).padStart(16, '0');
+}
+
+function scoreCandidate(c) {
+  // Prefer IPv6 path first per FIPS-poc-sec intent, then RFC1918 v4, then others
+  if (c.family === 'IPv6') return 300;
+  if (c.family === 'IPv4' && (c.host.startsWith('10.') || c.host.startsWith('192.168.') || c.host.startsWith('172.'))) return 200;
+  return 100;
+}
+
+function pickBestEndpoint(candidates, fallbackPort) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return { host: publicHostHint(), port: fallbackPort };
+  const sorted = [...candidates].sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+  return { host: sorted[0].host, port: sorted[0].port || fallbackPort };
 }
 
 function nonce() {
@@ -332,10 +368,14 @@ async function runServer(cfg) {
           });
           stopPunchers.set(msg.nonce, stopPunch);
 
+          const serverCandidates = getLocalCandidates().map((c) => ({ ...c, port: addr.port }));
           const reply = {
             type: 'fips.udp.test.server-info',
             nonce: msg.nonce,
             endpoint: { host: advertiseHost, port: addr.port },
+            candidates: serverCandidates,
+            bloomHint: buildBloomHint(serverCandidates),
+            selectedPath: pickBestEndpoint(serverCandidates, addr.port),
             punch: {
               startAtMs,
               intervalMs: cfg.punchIntervalMs,
@@ -398,7 +438,8 @@ async function runClient(cfg) {
   const socket = dgram.createSocket('udp4');
   await bindSocket(socket, '0.0.0.0', 0);
   const localAddr = socket.address();
-  const clientCandidate = { host: publicHostHint(), port: localAddr.port };
+  const clientCandidates = getLocalCandidates().map((c) => ({ ...c, port: localAddr.port }));
+  const clientCandidate = pickBestEndpoint(clientCandidates, localAddr.port);
 
   const punchState = { established: false, remote: null, nonce: null };
   const duplexState = { nonce: helloNonce, receivedBytes: 0, remoteDone: false, remoteSentBytes: 0 };
@@ -466,6 +507,8 @@ async function runClient(cfg) {
       nonce: helloNonce,
       want: 'udp-endpoint',
       clientEndpoint: clientCandidate,
+      clientCandidates,
+      bloomHint: buildBloomHint(clientCandidates),
     };
     publishDM({ pool, relays, sk, recipientPubkey: serverPubkey, obj: hello, debugLog });
 
@@ -485,9 +528,10 @@ async function runClient(cfg) {
     }, 250);
   });
 
+  const serverPreferred = serverInfo.selectedPath || pickBestEndpoint(serverInfo.candidates || [], serverInfo.endpoint?.port || 9999);
   const stopPunch = startPunching({
     socket,
-    remote: serverInfo.endpoint,
+    remote: serverPreferred,
     punchNonce: helloNonce,
     startAtMs: serverInfo.punch?.startAtMs || Date.now(),
     intervalMs: serverInfo.punch?.intervalMs || cfg.punchIntervalMs,
@@ -500,7 +544,7 @@ async function runClient(cfg) {
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  const target = punchState.remote || serverInfo.endpoint;
+  const target = punchState.remote || serverPreferred || serverInfo.endpoint;
   if (!punchState.established) debugLog?.('punch-not-established', { fallbackTarget: target });
 
   // Duplex ~video-call style stream: both peers send at same time
@@ -577,6 +621,11 @@ async function runClient(cfg) {
         identity: nip19.npubEncode(senderPubkey),
         keySource,
         rendezvous: { viaNostrDM: true, serverNpub: cfg.npub, endpointDiscovered: true },
+        fipsAlignment: {
+          ipv6AwareCandidates: true,
+          bloomHintsExchanged: true,
+          selectedPath: cfg.showEndpoints ? target : '[hidden]'
+        },
         punching: {
           established: punchState.established,
           selectedRemote: cfg.showEndpoints ? target : '[hidden]',

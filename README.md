@@ -158,10 +158,11 @@ A lightweight browser-to-browser video call demo is included:
 node apps/fips-video-chat.mjs --port 8088
 ```
 
-Open the page on both devices (same server URL), enter the same room id, click **Start camera**, then one side clicks **Call**.
+Open the page on both devices (same server URL), enter the same room id, click **Start camera+mic**, then one side clicks **Call**.
 
 Notes:
 - This uses WebRTC with a public STUN server for basic NAT traversal.
+- Includes mic mute/unmute and speaker mute/unmute buttons.
 - It is intentionally simple (1:1 room, no auth, no recording).
 
 ## SSH-like demos
