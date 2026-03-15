@@ -5,6 +5,12 @@ import { performance } from 'node:perf_hooks';
 import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 
+async function ensureWebSocketSupport() {
+  if (typeof globalThis.WebSocket !== 'undefined') return;
+  const ws = await import('ws');
+  globalThis.WebSocket = ws.WebSocket || ws.default;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const out = {
@@ -332,6 +338,7 @@ async function runClient(cfg) {
 }
 
 async function main() {
+  await ensureWebSocketSupport();
   const cfg = parseArgs();
   if (!['server', 'client'].includes(cfg.mode)) throw new Error('use --mode server|client');
   if (cfg.mode === 'server') return runServer(cfg);
