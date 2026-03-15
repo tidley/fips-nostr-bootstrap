@@ -319,6 +319,10 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     if (localStream) {
       for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
+    } else {
+      // Allow receive-only calls when camera/mic are blocked on mobile/webview.
+      try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
+      try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
     }
 
     return pc;
@@ -338,7 +342,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const startOrJoin = async () => {
     if (!peerPubkey || !peerReachable) return;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (!localStream) await startCamera();
+    if (!localStream) {
+      try {
+        await startCamera();
+      } catch (e) {
+        const secureHint = (!window.isSecureContext || location.protocol !== 'https:')
+          ? ' (requires HTTPS/secure context)'
+          : '';
+        setState('connecting', 'Media blocked; joining receive-only' + secureHint);
+      }
+    }
     const p = ensurePeer();
     callStartedAt = Date.now();
 
