@@ -51,7 +51,7 @@ const html = `<!doctype html>
 <script>
 const out = document.getElementById('out');
 const status = document.getElementById('status');
-function log(x){ out.value += x + '\n'; out.scrollTop = out.scrollHeight; }
+function log(x){ out.value += x + '\\n'; out.scrollTop = out.scrollHeight; }
 
 const es = new EventSource('/api/events');
 es.addEventListener('status', ev => {
@@ -61,7 +61,7 @@ es.addEventListener('status', ev => {
 });
 es.addEventListener('result', ev => {
   const d = JSON.parse(ev.data);
-  log('\n$ ' + d.command + '\n' + (d.stdout||'') + (d.stderr||''));
+  log('\\n$ ' + d.command + '\\n' + (d.stdout||'') + (d.stderr||''));
   if(!d.ok) log('[error] ' + (d.error||('exit '+d.code)));
 });
 
