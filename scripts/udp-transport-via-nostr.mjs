@@ -2,7 +2,7 @@
 import dgram from 'node:dgram';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 
 async function ensureWebSocketSupport() {
@@ -57,6 +57,15 @@ function resolveSecretKey() {
 function relaysFromEnv() {
   const raw = process.env.NOSTR_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net,wss://nip17.tomdwyer.uk';
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function createPoolWithAuth(sk, debugLog) {
+  return new SimplePool({
+    automaticallyAuth: (relayUrl) => async (authTemplate) => {
+      debugLog?.('nip42-auth', { relayUrl });
+      return finalizeEvent(authTemplate, sk);
+    },
+  });
 }
 
 function publicHostHint() {
@@ -120,7 +129,7 @@ async function runServer(cfg) {
   const debugLog = cfg.debug ? (label, data = {}) => console.error(`[debug][server] ${label}`, data) : null;
   const { sk, source: keySource } = resolveSecretKey();
   const relays = relaysFromEnv();
-  const pool = new SimplePool();
+  const pool = createPoolWithAuth(sk, debugLog);
   const senderPubkey = getPublicKey(sk);
 
   const socket = dgram.createSocket('udp4');
@@ -194,7 +203,7 @@ async function runClient(cfg) {
 
   const { sk, source: keySource } = resolveSecretKey();
   const relays = relaysFromEnv();
-  const pool = new SimplePool();
+  const pool = createPoolWithAuth(sk, debugLog);
   const senderPubkey = getPublicKey(sk);
 
   const helloNonce = nonce();

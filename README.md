@@ -70,6 +70,7 @@ Outputs JSON including:
 
 Notes:
 - Client requires only `--npub` as input.
+- Script now attempts NIP-42 AUTH automatically when relay requires auth.
 - Allow inbound UDP on server port (example: 9999).
 - Add `--show-endpoints` if you want endpoint addresses printed in output.
 
