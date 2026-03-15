@@ -198,6 +198,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let peerReachable = false;
   let callActive = false;
   let callStartedAt = 0;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  const MAX_RECONNECT_ATTEMPTS = 3;
 
   let micMuted = true;
   let camEnabled = false;
@@ -399,9 +402,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         }
       }
 
-      const sendIce = () => sendNip17(peerPubkey, { type:'ice', candidate: e.candidate });
-      const preferred = parsed && (isPrivateIPv4(parsed.ip) || isLocalIPv6(parsed.ip) || parsed.type === 'host');
-      if (preferred || Date.now() - callStartedAt > 1500) sendIce(); else setTimeout(sendIce, 1500);
+      // Reliability-first: forward every candidate immediately.
+      sendNip17(peerPubkey, { type:'ice', candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
@@ -419,6 +421,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       remoteVideo.onresize = applyRatioClass;
       applyRatioClass();
       setState('connected', 'Remote media connected');
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        reconnectAttempts = 0;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      }
+      if ((pc.connectionState === 'failed' || pc.connectionState === 'disconnected') && callActive) {
+        scheduleReconnect();
+      }
     };
 
     if (localStream) {
@@ -441,6 +453,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const startOrJoin = async () => {
     if (!peerPubkey || !peerReachable) return;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (!localStream) await startCamera();
     const p = ensurePeer();
     callStartedAt = Date.now();
@@ -458,10 +471,41 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     }
 
     callActive = true;
+    reconnectAttempts = 0;
     joinEndBtn.textContent = 'End call';
     joinEndBtn.classList.remove('primary');
     joinEndBtn.classList.add('danger');
     setState('connecting', 'Establishing P2P...');
+  };
+
+  const scheduleReconnect = () => {
+    if (!callActive || !peerPubkey) return;
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      setState('failed', 'Connection failed (max retries reached)');
+      joinEndBtn.textContent = 'Retry call';
+      joinEndBtn.classList.remove('danger');
+      joinEndBtn.classList.add('primary');
+      callActive = false;
+      return;
+    }
+
+    reconnectAttempts += 1;
+    const delay = Math.min(4000, 800 * reconnectAttempts);
+    setState('connecting', 'Reconnecting… (' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')');
+
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(async () => {
+      try {
+        if (pc) {
+          pc.close();
+          pc = null;
+        }
+        pendingRemoteOffer = null;
+        await startOrJoin();
+      } catch {
+        scheduleReconnect();
+      }
+    }, delay);
   };
 
   const endCall = (notifyPeer = true) => {
@@ -471,6 +515,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       pc.close();
       pc = null;
     }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    reconnectAttempts = 0;
     pendingRemoteOffer = null;
     remoteVideo.srcObject = null;
     callActive = false;
