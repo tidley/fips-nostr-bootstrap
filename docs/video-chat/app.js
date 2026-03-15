@@ -94,6 +94,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let callStartedAt = 0;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
+  let iceRestartTried = false;
   const MAX_RECONNECT_ATTEMPTS = 3;
 
   let micMuted = true;
@@ -324,6 +325,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
         reconnectAttempts = 0;
+        iceRestartTried = false;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       }
       if ((pc.connectionState === 'failed' || pc.connectionState === 'disconnected') && callActive) {
@@ -353,6 +355,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
   };
 
+  const sendOffer = async (p, opts = {}) => {
+    const offer = await p.createOffer(opts);
+    await p.setLocalDescription(offer);
+    sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+  };
+
   const startOrJoin = async () => {
     if (!peerPubkey || !peerReachable) return;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -376,13 +384,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       sendNip17(peerPubkey, { type: 'answer', sdp: answer });
       pendingRemoteOffer = null;
     } else {
-      const offer = await p.createOffer();
-      await p.setLocalDescription(offer);
-      sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+      await sendOffer(p);
     }
 
     callActive = true;
     reconnectAttempts = 0;
+    iceRestartTried = false;
     joinEndBtn.textContent = 'End call';
     joinEndBtn.classList.remove('primary');
     joinEndBtn.classList.add('danger');
@@ -391,6 +398,23 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const scheduleReconnect = () => {
     if (!callActive || !peerPubkey) return;
+    if (reconnectTimer) return;
+
+    // First retry path: keep same PeerConnection and do one ICE restart.
+    if (pc && !iceRestartTried) {
+      iceRestartTried = true;
+      setState('connecting', 'Reconnecting… (ICE restart)');
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null;
+        try {
+          await sendOffer(pc, { iceRestart: true });
+        } catch {
+          scheduleReconnect();
+        }
+      }, 400);
+      return;
+    }
+
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       setState('failed', 'Connection failed (max retries reached)');
       joinEndBtn.textContent = 'Retry call';
@@ -404,8 +428,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const delay = Math.min(4000, 800 * reconnectAttempts);
     setState('connecting', 'Reconnecting… (' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')');
 
-    if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null;
       try {
         if (pc) {
           pc.close();
@@ -428,6 +452,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     reconnectAttempts = 0;
+    iceRestartTried = false;
     pendingRemoteOffer = null;
     remoteVideo.srcObject = null;
     callActive = false;
