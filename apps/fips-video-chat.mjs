@@ -200,7 +200,6 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   let pendingRemoteOffer = null;
   let selectedPathReason = 'n/a';
-  let iceRestartAttempted = false;
   const localCandidates = [];
   const remoteCandidates = [];
   const pendingRequests = new Map();
@@ -390,27 +389,14 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         }
       }
 
-      // Reliability first: forward every ICE candidate immediately.
-      sendNip17(peerPubkey, { type:'ice', candidate: e.candidate });
+      const sendIce = () => sendNip17(peerPubkey, { type:'ice', candidate: e.candidate });
+      const preferred = parsed && (isPrivateIPv4(parsed.ip) || isLocalIPv6(parsed.ip) || parsed.type === 'host');
+      if (preferred || Date.now() - callStartedAt > 1500) sendIce(); else setTimeout(sendIce, 1500);
     };
 
     pc.ontrack = (e) => {
       remoteVideo.srcObject = e.streams[0];
       setState('connected', 'Remote media connected');
-    };
-
-    pc.oniceconnectionstatechange = async () => {
-      if (pc.iceConnectionState === 'failed' && !iceRestartAttempted && peerPubkey) {
-        iceRestartAttempted = true;
-        setState('connecting', 'ICE failed, retrying…');
-        try {
-          const offer = await pc.createOffer({ iceRestart: true });
-          await pc.setLocalDescription(offer);
-          sendNip17(peerPubkey, { type: 'offer', sdp: offer, iceRestart: true });
-        } catch {
-          setState('failed', 'ICE restart failed');
-        }
-      }
     };
 
     if (localStream) {
@@ -436,7 +422,6 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (!localStream) await startCamera();
     const p = ensurePeer();
     callStartedAt = Date.now();
-    iceRestartAttempted = false;
 
     if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
@@ -465,7 +450,6 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       pc = null;
     }
     pendingRemoteOffer = null;
-    iceRestartAttempted = false;
     remoteVideo.srcObject = null;
     callActive = false;
     selectedPathReason = 'n/a';
