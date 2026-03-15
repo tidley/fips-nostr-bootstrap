@@ -18,18 +18,22 @@ const html = `<!doctype html>
   <title>FIPS Simple Video Chat</title>
   <style>
     :root { color-scheme: dark; }
-    body { font-family: system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 12px; background:#0f1216; color:#dbe2ea; }
+    body { font-family: Roboto, system-ui, sans-serif; max-width: 1100px; margin: 18px auto; padding: 0 12px; background:#202124; color:#e8eaed; }
     .row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
-    input, button { padding: 8px; font-size: 14px; background:#1b2129; color:#dbe2ea; border:1px solid #3a4655; border-radius:8px; }
-    input { flex: 1; }
-    button { cursor:pointer; }
-    #localVideo { width: 28%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
-    #remoteVideo { width: 68%; background: #090c10; border-radius: 8px; border:1px solid #2f3946; }
-    #status { color: #9fb2c7; font-size: 13px; }
+    input, button { padding: 10px 12px; font-size: 14px; background:#2d2f31; color:#e8eaed; border:1px solid #4a4d52; border-radius:24px; }
+    input { flex: 1; border-radius:12px; }
+    button { cursor:pointer; transition:all .15s ease; }
+    button:hover { filter: brightness(1.1); }
+    #localVideo { width: 24%; background: #111; border-radius: 12px; border:1px solid #3c4043; }
+    #remoteVideo { width: 74%; background: #111; border-radius: 12px; border:1px solid #3c4043; }
+    #status { color: #9aa0a6; font-size: 13px; }
     #myNpub { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; color:#c5d7ea }
-    #qr { width: 170px; height: 170px; border: 1px solid #2f3946; border-radius: 8px; background:#fff; }
-    .panel { border:1px solid #2f3946; background:#141a22; border-radius:10px; padding:10px; margin-bottom:10px; }
-    #stats { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color:#9ed0ff; }
+    #qr { width: 170px; height: 170px; border: 1px solid #3c4043; border-radius: 12px; background:#fff; }
+    .panel { border:1px solid #3c4043; background:#2b2c2f; border-radius:12px; padding:12px; margin-bottom:10px; }
+    #stats { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color:#8ab4f8; }
+    .controls { position: sticky; bottom: 10px; background:#2b2c2f; border:1px solid #3c4043; border-radius:32px; padding:10px; justify-content:center; }
+    .danger { background:#d93025; border-color:#d93025; }
+    .primary { background:#1a73e8; border-color:#1a73e8; }
   </style>
 </head>
 <body>
@@ -60,10 +64,9 @@ const html = `<!doctype html>
     <div id="incomingList"></div>
   </div>
 
-  <div class="row">
-    <button id="cam">Start camera+mic</button>
-    <button id="call">Call</button>
-    <button id="end">End call</button>
+  <div class="row controls">
+    <button id="toggleCall" class="primary">Start call</button>
+    <button id="toggleCam">Turn off camera</button>
     <button id="mute">Mute mic</button>
     <button id="speaker">Mute speaker</button>
   </div>
@@ -117,6 +120,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let peerReachable = false;
   let micMuted = false;
   let speakerMuted = false;
+  let camEnabled = true;
+  let callActive = false;
   let scanStream = null;
   let scanTimer = null;
   let statsTimer = null;
@@ -278,6 +283,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             const answer = await p.createAnswer();
             await p.setLocalDescription(answer);
             sendNip17(fromPubkey, { type: 'answer', sdp: answer });
+            callActive = true;
+            const b = document.getElementById('toggleCall');
+            b.textContent = 'End call';
+            b.classList.remove('primary');
+            b.classList.add('danger');
             status('answer sent');
             return;
           }
@@ -285,6 +295,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           if (msg.type === 'answer') {
             const p = ensurePeer();
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            callActive = true;
+            const b = document.getElementById('toggleCall');
+            b.textContent = 'End call';
+            b.classList.remove('primary');
+            b.classList.add('danger');
             status('call established');
             return;
           }
@@ -428,6 +443,10 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const offer = await p.createOffer();
     await p.setLocalDescription(offer);
     sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+    callActive = true;
+    document.getElementById('toggleCall').textContent = 'End call';
+    document.getElementById('toggleCall').classList.remove('primary');
+    document.getElementById('toggleCall').classList.add('danger');
     status('offer sent');
   }
 
@@ -443,6 +462,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     remoteCandidates.length = 0;
     if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
     statsEl.textContent = 'call ended';
+    callActive = false;
+    const b = document.getElementById('toggleCall');
+    b.textContent = 'Start call';
+    b.classList.remove('danger');
+    b.classList.add('primary');
     status('call ended');
   }
 
@@ -519,9 +543,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   document.getElementById('request').onclick = sendRequest;
-  document.getElementById('cam').onclick = () => startCamera().catch((e) => status('camera error: ' + e.message));
-  document.getElementById('call').onclick = () => startCall().catch((e) => status('call error: ' + e.message));
-  document.getElementById('end').onclick = endCall;
+  document.getElementById('toggleCall').onclick = () => {
+    if (callActive) endCall();
+    else startCall().catch((e) => status('call error: ' + e.message));
+  };
+  document.getElementById('toggleCam').onclick = () => {
+    if (!localStream) return;
+    camEnabled = !camEnabled;
+    for (const t of localStream.getVideoTracks()) t.enabled = camEnabled;
+    document.getElementById('toggleCam').textContent = camEnabled ? 'Turn off camera' : 'Turn on camera';
+    status(camEnabled ? 'camera on' : 'camera off');
+  };
   document.getElementById('mute').onclick = () => {
     if (!localStream) return;
     micMuted = !micMuted;
@@ -537,6 +569,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   startListening();
+  startCamera().catch((e) => status('camera auto-start error: ' + e.message));
 })();
 </script>
 </body>
