@@ -34,7 +34,23 @@ console.log(session);
 `session` includes:
 - `established` state
 - selected `remote` endpoint
-- active UDP `socket` for higher-level protocols
+- active UDP `socket`
+- `session` channel object with `.send(channel, payload, type)`
+
+Example channels:
+
+```js
+// app-level channels over established punched path
+session.session.send('shell', { cmd: 'uname -a' }, 'request');
+session.session.send('file', { name: 'foo.txt', chunk: 'base64...' }, 'chunk');
+session.session.send('media', { audio: 'opus-frame-base64' }, 'frame');
+
+session.session.on('channel:shell', (payload, frame) => {
+  console.log('shell payload', payload, frame.type);
+});
+```
+
+This is a lightweight framing layer to start integrating SSH/file/video style protocols; reliability/ordering/encryption policy beyond transport should be added by higher layers.
 
 ## Trusted npubs
 

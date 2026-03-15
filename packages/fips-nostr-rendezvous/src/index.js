@@ -43,6 +43,39 @@ function publishDM({ pool, relays, sk, recipientPubkey, obj }) {
   Promise.allSettled(pool.publish(relays, event)).catch(() => undefined);
 }
 
+class FipsStackSession extends EventEmitter {
+  constructor({ socket, remote, sessionId }) {
+    super();
+    this.socket = socket;
+    this.remote = remote;
+    this.sessionId = sessionId;
+    this._onMessage = (msg, rinfo) => {
+      if (rinfo.address !== this.remote.host || rinfo.port !== this.remote.port) return;
+      if (msg.length < 5) return;
+      if (msg.subarray(0, 5).toString() !== 'FIPS1') return;
+      try {
+        const frame = JSON.parse(msg.subarray(5).toString('utf8'));
+        if (frame?.sessionId !== this.sessionId) return;
+        this.emit('frame', frame);
+        if (frame?.channel) this.emit(`channel:${frame.channel}`, frame.payload, frame);
+      } catch {
+        // ignore malformed frame
+      }
+    };
+    this.socket.on('message', this._onMessage);
+  }
+
+  send(channel, payload, type = 'data') {
+    const frame = { sessionId: this.sessionId, type, channel, payload, at: Date.now() };
+    const pkt = Buffer.concat([Buffer.from('FIPS1'), Buffer.from(JSON.stringify(frame))]);
+    this.socket.send(pkt, this.remote.port, this.remote.host);
+  }
+
+  close() {
+    this.socket.off('message', this._onMessage);
+  }
+}
+
 export class FipsNostrRendezvousNode extends EventEmitter {
   constructor(opts = {}) {
     super();
@@ -61,6 +94,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.pool = null;
     this.socket = dgram.createSocket('udp4');
     this.punchSessions = new Map();
+    this.sessions = new Map();
   }
 
   getNpub() {
@@ -89,10 +123,20 @@ export class FipsNostrRendezvousNode extends EventEmitter {
         this.socket.send(Buffer.from(JSON.stringify({ t: 'PROBE_ACK', n: pkt.n })), rinfo.port, rinfo.address);
         this.punchSessions.set(pkt.n, { established: true, remote: { host: rinfo.address, port: rinfo.port } });
         this.emit('punch', { nonce: pkt.n, remote: { host: rinfo.address, port: rinfo.port } });
+        if (!this.sessions.has(pkt.n)) {
+          const session = new FipsStackSession({ socket: this.socket, remote: { host: rinfo.address, port: rinfo.port }, sessionId: pkt.n });
+          this.sessions.set(pkt.n, session);
+          this.emit('session', { sessionId: pkt.n, remote: { host: rinfo.address, port: rinfo.port }, session });
+        }
       }
       if (pkt.t === 'PROBE_ACK') {
         this.punchSessions.set(pkt.n, { established: true, remote: { host: rinfo.address, port: rinfo.port } });
         this.emit('punch', { nonce: pkt.n, remote: { host: rinfo.address, port: rinfo.port } });
+        if (!this.sessions.has(pkt.n)) {
+          const session = new FipsStackSession({ socket: this.socket, remote: { host: rinfo.address, port: rinfo.port }, sessionId: pkt.n });
+          this.sessions.set(pkt.n, session);
+          this.emit('session', { sessionId: pkt.n, remote: { host: rinfo.address, port: rinfo.port }, session });
+        }
       }
     });
 
@@ -191,7 +235,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this._startPunch(helloNonce, serverInfo.endpoint, serverInfo.punch);
 
     const established = await this.waitForPunch(helloNonce, opts.punchWaitMs || (serverInfo.punch?.durationMs || 30000) + 5000);
-    return { nonce: helloNonce, established, remote: established?.remote || serverInfo.endpoint, socket: this.socket };
+    const remote = established?.remote || serverInfo.endpoint;
+    const session = new FipsStackSession({ socket: this.socket, remote, sessionId: helloNonce });
+    this.emit('session', { sessionId: helloNonce, remote, session });
+    return { nonce: helloNonce, established, remote, socket: this.socket, session };
   }
 
   waitForPunch(nonceValue, timeoutMs = 35000) {
@@ -228,7 +275,9 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
   close() {
     this.sub?.close();
-    this.pool.close(this.relays);
+    this.pool?.close(this.relays);
+    for (const s of this.sessions.values()) s.close();
+    this.sessions.clear();
     this.socket.close();
   }
 }
