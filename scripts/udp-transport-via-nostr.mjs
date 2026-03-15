@@ -3,12 +3,18 @@ import dgram from 'node:dgram';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { useWebSocketImplementation } from 'nostr-tools/relay';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 
 async function ensureWebSocketSupport() {
-  if (typeof globalThis.WebSocket !== 'undefined') return;
+  if (typeof globalThis.WebSocket !== 'undefined') {
+    useWebSocketImplementation(globalThis.WebSocket);
+    return;
+  }
   const ws = await import('ws');
-  globalThis.WebSocket = ws.WebSocket || ws.default;
+  const WS = ws.WebSocket || ws.default;
+  globalThis.WebSocket = WS;
+  useWebSocketImplementation(WS);
 }
 
 function parseArgs() {
