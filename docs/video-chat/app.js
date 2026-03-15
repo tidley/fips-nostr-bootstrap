@@ -19,6 +19,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const RELAYS = (fromGlobal && fromGlobal.length ? fromGlobal : (fromQuery && fromQuery.length ? fromQuery : DEFAULT_RELAYS));
   const APP = 'fips.video.v1';
 
+  const DEFAULT_ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  ];
+
+  const ICE_SERVERS = Array.isArray(window.FIPS_VIDEO_ICE_SERVERS) && window.FIPS_VIDEO_ICE_SERVERS.length
+    ? window.FIPS_VIDEO_ICE_SERVERS
+    : DEFAULT_ICE_SERVERS;
+
   const connBadge = document.getElementById('connBadge');
   const overlayStatus = document.getElementById('overlayStatus');
   const preCall = document.getElementById('preCall');
@@ -266,13 +278,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
       if (pc.connectionState === 'connected') setState('direct', 'Connected (P2P)');
       else if (pc.connectionState === 'connecting') setState('connecting', 'Establishing P2P...');
-      else if (['failed', 'disconnected'].includes(pc.connectionState)) setState('failed', 'Connection unstable/failed');
+      else if (['failed', 'disconnected'].includes(pc.connectionState)) {
+        setState('failed', 'Connection unstable/failed (check about:webrtc)');
+      }
     }, 1000);
   };
 
   const ensurePeer = () => {
     if (pc) return pc;
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc = new RTCPeerConnection({
+      iceServers: ICE_SERVERS,
+      iceCandidatePoolSize: 10,
+    });
     startStatsLoop();
 
     pc.onicecandidate = (e) => {

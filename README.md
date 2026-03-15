@@ -188,6 +188,10 @@ Relay config notes (client-side):
 - Override relays with querystring: `?relays=wss://relay1,wss://relay2`
 - Or set `window.FIPS_VIDEO_RELAYS = ['wss://relay1', 'wss://relay2']` before app init.
 
+ICE/TURN notes:
+- Static page now includes STUN + TURN defaults for harder NAT cases.
+- You can override with `window.FIPS_VIDEO_ICE_SERVERS = [{ urls:'stun:...' }, { urls:'turn:...', username:'...', credential:'...' }]`.
+
 QR notes:
 - QR image is generated client-side.
 - Scanning uses native `BarcodeDetector` when available.
