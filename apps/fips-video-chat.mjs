@@ -162,6 +162,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const RELAYS = ${JSON.stringify(relayList)};
   const APP = 'fips.video.v1';
 
+  const dbg = (stage, message, extra) => {
+    const ts = new Date().toISOString();
+    if (extra !== undefined) console.info('[fips-video][' + ts + '][' + stage + '] ' + message, extra);
+    else console.info('[fips-video][' + ts + '][' + stage + '] ' + message);
+  };
+  const dErr = (stage, message, err, extra) => {
+    if (extra !== undefined) console.error('[fips-video][' + stage + '] ' + message, { err, extra });
+    else console.error('[fips-video][' + stage + '] ' + message, err);
+  };
+
   const connBadge = document.getElementById('connBadge');
   const overlayStatus = document.getElementById('overlayStatus');
   const preCall = document.getElementById('preCall');
@@ -198,7 +208,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           const pub = getPublicKey(sk);
           return { sk, pub, npub: nip19.npubEncode(pub), mode: 'nsec' };
         }
-      } catch {
+      } catch (err) {
+        dErr('identity', 'saved nsec invalid, falling back to ephemeral', err);
         sessionStorage.removeItem('fips_video_nsec');
       }
     }
@@ -209,6 +220,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const ident = resolveIdentity();
+  dbg('init', 'identity resolved', { mode: ident.mode, npub: ident.npub });
   const sk = ident.sk;
   const pub = ident.pub;
   const myNpub = ident.npub;
@@ -247,6 +259,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const allowedPeers = new Set();
 
   const setState = (state, detail = '') => {
+    dbg('state', state + (detail ? ' :: ' + detail : ''));
     const m = {
       waiting: ['Waiting', 'badge'],
       ringing: ['Incoming request', 'badge warn'],
@@ -307,8 +320,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const sendNip17 = (toPubkey, body) => {
+    dbg('signal:send', body?.type || 'unknown', { to: toPubkey, body });
     const event = wrapEvent(sk, { publicKey: toPubkey }, JSON.stringify({ app: APP, ...body }));
-    Promise.allSettled(pool.publish(RELAYS, event)).catch(() => undefined);
+    Promise.allSettled(pool.publish(RELAYS, event)).catch((err) => dErr('signal:send', 'publish failed', err, { to: toPubkey, body }));
   };
 
   const sendCandidateSnapshot = () => {
@@ -415,6 +429,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const ensurePeer = () => {
     if (pc) return pc;
+    dbg('webrtc:peer', 'creating RTCPeerConnection');
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
     startStatsLoop();
 
@@ -431,10 +446,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       }
 
       // Reliability-first: forward every candidate immediately.
+      dbg('webrtc:ice-local', 'candidate emitted', parsed || e.candidate);
       sendNip17(peerPubkey, { type:'ice', candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
+      dbg('webrtc:track', 'remote track received', { streams: e.streams?.length || 0, kind: e.track?.kind });
       remoteVideo.srcObject = e.streams[0];
       const stage = document.querySelector('.videoStage');
       const applyRatioClass = () => {
@@ -452,6 +469,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     };
 
     pc.onconnectionstatechange = () => {
+      dbg('webrtc:conn', 'connection state changed', { connectionState: pc.connectionState, iceConnectionState: pc.iceConnectionState });
       if (pc.connectionState === 'connected') {
         reconnectAttempts = 0;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -469,6 +487,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const startCamera = async () => {
+    dbg('media:getUserMedia', 'requesting local camera/mic');
     localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -477,22 +496,29 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     for (const t of localStream.getVideoTracks()) t.enabled = camEnabled;
     for (const t of localStream.getAudioTracks()) t.enabled = !micMuted;
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
+    dbg('media:getUserMedia', 'local media ready', { audioTracks: localStream.getAudioTracks().length, videoTracks: localStream.getVideoTracks().length });
   };
 
   const startOrJoin = async () => {
-    if (!peerPubkey || !peerReachable) return;
+    dbg('call:start', 'startOrJoin invoked', { hasPeerPubkey: Boolean(peerPubkey), peerReachable, hasPendingOffer: Boolean(pendingRemoteOffer) });
+    if (!peerPubkey || !peerReachable) {
+      dbg('call:start', 'blocked: peer not ready', { peerPubkey, peerReachable });
+      return;
+    }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     if (!localStream) await startCamera();
     const p = ensurePeer();
     callStartedAt = Date.now();
 
     if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
+      dbg('call:start', 'applying pending remote offer + creating answer');
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
       const answer = await p.createAnswer();
       await p.setLocalDescription(answer);
       sendNip17(peerPubkey, { type: 'answer', sdp: answer });
       pendingRemoteOffer = null;
     } else {
+      dbg('call:start', 'creating fresh local offer');
       const offer = await p.createOffer();
       await p.setLocalDescription(offer);
       sendNip17(peerPubkey, { type: 'offer', sdp: offer });
@@ -507,6 +533,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const scheduleReconnect = () => {
+    dbg('call:reconnect', 'schedule reconnect called', { callActive, hasPeer: Boolean(peerPubkey), reconnectAttempts });
     if (!callActive || !peerPubkey) return;
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       setState('failed', 'Connection failed (max retries reached)');
@@ -530,13 +557,15 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         }
         pendingRemoteOffer = null;
         await startOrJoin();
-      } catch {
+      } catch (err) {
+        dErr('call:reconnect', 'reconnect attempt failed', err);
         scheduleReconnect();
       }
     }, delay);
   };
 
   const endCall = (notifyPeer = true) => {
+    dbg('call:end', 'ending call', { notifyPeer, peerPubkey, callActive });
     if (notifyPeer && peerPubkey) sendNip17(peerPubkey, { type: 'call_end', ts: Date.now() });
     if (pc) {
       pc.getSenders().forEach((s) => { try { pc.removeTrack(s); } catch {} });
@@ -589,7 +618,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           peerNpubEl.value = value;
           stopQrScan();
         }
-      } catch {}
+      } catch (err) {
+        dErr('qr:scan', 'scan frame failed', err);
+      }
     }, 250);
   };
 
@@ -602,14 +633,21 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const sendRequest = () => {
     const npub = peerNpubEl.value.trim();
+    dbg('request', 'send request clicked', { npub });
     if (!npub.startsWith('npub')) return setState('failed', 'Invalid peer npub');
-    peerNpub = npub;
-    peerPubkey = npubToPubkey(npub);
-    sendNip17(peerPubkey, { type:'request_connect', ts: Date.now() });
-    setState('connecting', 'Request sent. Waiting for accept...');
+    try {
+      peerNpub = npub;
+      peerPubkey = npubToPubkey(npub);
+      sendNip17(peerPubkey, { type:'request_connect', ts: Date.now() });
+      setState('connecting', 'Request sent. Waiting for accept...');
+    } catch (err) {
+      dErr('request', 'failed to decode npub or send request', err, { npub });
+      setState('failed', 'Request failed: ' + (err?.message || err));
+    }
   };
 
   const listen = () => {
+    dbg('signal:listen', 'subscribing to relays', { relays: RELAYS, pub });
     pool.subscribeMany(RELAYS, { kinds:[1059], '#p':[pub], since: Math.floor(Date.now()/1000) - 3*24*60*60 }, {
       onevent: async (evt) => {
         try {
@@ -619,6 +657,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           const fromPubkey = rumor.pubkey;
           const fromNpub = nip19.npubEncode(fromPubkey);
+          dbg('signal:recv', msg.type || 'unknown', { fromNpub, fromPubkey, msg });
 
           if (msg.type === 'request_connect') {
             pendingRequests.set(fromNpub, { fromPubkey, ts: msg.ts || Date.now() });
@@ -641,7 +680,10 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             return;
           }
 
-          if (!allowedPeers.has(fromPubkey)) return;
+          if (!allowedPeers.has(fromPubkey)) {
+            dbg('signal:recv', 'ignored message from non-allowed peer', { fromNpub, type: msg.type });
+            return;
+          }
 
           if (msg.type === 'fips_candidates') {
             remoteCandidates.length = 0;
@@ -680,9 +722,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'ice' && msg.candidate) {
             const p = ensurePeer();
-            try { await p.addIceCandidate(msg.candidate); } catch {}
+            try {
+              await p.addIceCandidate(msg.candidate);
+              dbg('webrtc:ice-remote', 'candidate accepted');
+            } catch (err) {
+              dErr('webrtc:ice-remote', 'addIceCandidate failed', err, msg.candidate);
+            }
           }
-        } catch {}
+        } catch (err) {
+          dErr('signal:recv', 'failed to process incoming message', err, evt);
+        }
       }
     });
 
@@ -712,19 +761,23 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   document.getElementById('scan').onclick = () => {
-    if (scanStream) stopQrScan(); else startQrScan().catch(() => setState('failed', 'QR scan failed'));
+    if (scanStream) stopQrScan();
+    else startQrScan().catch((err) => { dErr('qr:scan', 'failed to start scanner', err); setState('failed', 'QR scan failed'); });
   };
 
   document.getElementById('request').onclick = sendRequest;
 
   joinEndBtn.onclick = () => {
     if (callActive) endCall();
-    else startOrJoin().catch((e) => setState('failed', 'Join failed: ' + e.message));
+    else startOrJoin().catch((e) => {
+      dErr('call:start', 'Join failed', e);
+      setState('failed', 'Join failed: ' + e.message);
+    });
   };
 
   camBtn.onclick = async () => {
     if (!localStream) {
-      try { await startCamera(); } catch (e) { setState('failed', 'Camera error: ' + e.message); return; }
+      try { await startCamera(); } catch (e) { dErr('media:camera', 'camera toggle failed', e); setState('failed', 'Camera error: ' + e.message); return; }
     }
     camEnabled = !camEnabled;
     localStream.getVideoTracks().forEach((t) => (t.enabled = camEnabled));
@@ -733,7 +786,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   micBtn.onclick = async () => {
     if (!localStream) {
-      try { await startCamera(); } catch (e) { setState('failed', 'Mic error: ' + e.message); return; }
+      try { await startCamera(); } catch (e) { dErr('media:mic', 'mic toggle failed', e); setState('failed', 'Mic error: ' + e.message); return; }
     }
     micMuted = !micMuted;
     localStream.getAudioTracks().forEach((t) => (t.enabled = !micMuted));
