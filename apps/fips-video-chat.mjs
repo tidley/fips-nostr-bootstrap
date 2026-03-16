@@ -75,7 +75,7 @@ const html = `<!doctype html>
 <body>
   <div class="app">
     <div class="topbar">
-      <div class="title">Video Chat</div>
+      <div class="title">Video Chats</div>
       <div id="connBadge" class="badge">Waiting</div>
       <div class="row">
         <button id="openInfo">Info</button>
