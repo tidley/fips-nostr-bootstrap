@@ -319,7 +319,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       remoteVideo.onloadedmetadata = applyRatioClass;
       remoteVideo.onresize = applyRatioClass;
       applyRatioClass();
-      setState('connected', 'Remote media connected');
+      setState('connected', 'Phase 3/3: media flowing');
     };
 
     pc.onconnectionstatechange = () => {
@@ -361,21 +361,28 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     sendNip17(peerPubkey, { type: 'offer', sdp: offer });
   };
 
+  const wantsLocalMedia = () => camEnabled || !micMuted;
+
   const startOrJoin = async () => {
     if (!peerPubkey || !peerReachable) return;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (!localStream) {
+
+    setState('connecting', 'Phase 1/3: signaling ready');
+
+    if (!localStream && wantsLocalMedia()) {
       try {
         await startCamera();
       } catch (e) {
         const secureHint = (!window.isSecureContext || location.protocol !== 'https:')
           ? ' (requires HTTPS/secure context)'
           : '';
-        setState('connecting', 'Media blocked; joining receive-only' + secureHint);
+        setState('connecting', 'Local media blocked; continuing receive-only' + secureHint);
       }
     }
+
     const p = ensurePeer();
     callStartedAt = Date.now();
+    setState('connecting', 'Phase 2/3: ICE negotiation');
 
     if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
@@ -393,7 +400,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     joinEndBtn.textContent = 'End call';
     joinEndBtn.classList.remove('primary');
     joinEndBtn.classList.add('danger');
-    setState('connecting', 'Establishing P2P...');
+    setState('connecting', 'Phase 2/3: establishing direct path');
   };
 
   const scheduleReconnect = () => {
@@ -576,7 +583,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             joinEndBtn.textContent = 'End call';
             joinEndBtn.classList.remove('primary');
             joinEndBtn.classList.add('danger');
-            setState('connected', 'Call established');
+            setState('connected', 'Phase 2/3 complete: awaiting media tracks');
             return;
           }
 
