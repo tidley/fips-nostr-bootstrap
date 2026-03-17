@@ -554,16 +554,23 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const waitForIceGathering = async (peer, timeoutMs = 1400) => {
-    if (peer.iceGatheringState === 'complete') return;
+    if (peer.iceGatheringState === 'complete') {
+      dbg('webrtc:ice-gather', 'already complete', { timeoutMs });
+      return;
+    }
+    dbg('webrtc:ice-gather', 'waiting for completion', { timeoutMs, state: peer.iceGatheringState });
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
         peer.removeEventListener('icegatheringstatechange', onChange);
+        dbg('webrtc:ice-gather', 'timeout, proceeding with partial candidates', { timeoutMs, state: peer.iceGatheringState });
         resolve(undefined);
       }, timeoutMs);
       const onChange = () => {
+        dbg('webrtc:ice-gather', 'state change', { state: peer.iceGatheringState });
         if (peer.iceGatheringState !== 'complete') return;
         clearTimeout(timer);
         peer.removeEventListener('icegatheringstatechange', onChange);
+        dbg('webrtc:ice-gather', 'complete');
         resolve(undefined);
       };
       peer.addEventListener('icegatheringstatechange', onChange);
@@ -788,6 +795,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'answer') {
             const p = ensurePeer();
+            dbg('webrtc:answer', 'applying remote answer');
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
             callActive = true;
             joinEndBtn.textContent = 'End call';

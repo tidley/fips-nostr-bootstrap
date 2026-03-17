@@ -21,6 +21,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const STUN_URL = String(window.FIPS_STUN_URL || 'stun:nip17.tomdwyer.uk:3478');
   const SIGNAL_KIND = Number(window.FIPS_SIGNAL_KIND || 1059);
 
+  const dbg = (stage, message, extra) => {
+    if (extra !== undefined) console.info(`[fips-video][${stage}] ${message}`, extra);
+    else console.info(`[fips-video][${stage}] ${message}`);
+  };
+
   const connBadge = document.getElementById('connBadge');
   const overlayStatus = document.getElementById('overlayStatus');
   const preCall = document.getElementById('preCall');
@@ -203,6 +208,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const sendNip17 = (toPubkey, body) => {
+    dbg('signal:send', body?.type || 'unknown', { to: toPubkey, sessionId });
     const payload = { app: APP, session: sessionId, ...body };
     const event = finalizeEvent({
       kind: SIGNAL_KIND,
@@ -326,6 +332,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     pc.onicecandidate = (e) => {
       if (!e.candidate || !peerPubkey) return;
+      dbg('webrtc:ice-local', 'candidate emitted', { type: e.candidate.type, protocol: e.candidate.protocol, mid: e.candidate.sdpMid });
       const parsed = parseCandidate(e.candidate.candidate);
       if (parsed) {
         const exists = localCandidates.some((c) => c.ip===parsed.ip && c.port===parsed.port && c.type===parsed.type);
@@ -357,6 +364,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     };
 
     pc.onconnectionstatechange = () => {
+      dbg('webrtc:conn', 'state changed', { connectionState: pc.connectionState, iceConnectionState: pc.iceConnectionState, iceGatheringState: pc.iceGatheringState });
       if (pc.connectionState === 'connected') {
         reconnectAttempts = 0;
         iceRestartTried = false;
@@ -409,16 +417,23 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const waitForIceGathering = async (peer, timeoutMs = 1400) => {
     const done = () => peer.iceGatheringState === 'complete';
-    if (done()) return;
+    if (done()) {
+      dbg('webrtc:ice-gather', 'already complete', { timeoutMs });
+      return;
+    }
+    dbg('webrtc:ice-gather', 'waiting for completion', { timeoutMs, state: peer.iceGatheringState });
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
         peer.removeEventListener('icegatheringstatechange', onChange);
+        dbg('webrtc:ice-gather', 'timeout, proceeding with partial candidates', { timeoutMs, state: peer.iceGatheringState });
         resolve(undefined);
       }, timeoutMs);
       const onChange = () => {
+        dbg('webrtc:ice-gather', 'state change', { state: peer.iceGatheringState });
         if (!done()) return;
         clearTimeout(timer);
         peer.removeEventListener('icegatheringstatechange', onChange);
+        dbg('webrtc:ice-gather', 'complete');
         resolve(undefined);
       };
       peer.addEventListener('icegatheringstatechange', onChange);
@@ -655,6 +670,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'answer') {
             const p = ensurePeer();
+            dbg('webrtc:answer', 'applying remote answer');
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
             callActive = true;
             joinEndBtn.textContent = 'End call';
@@ -672,7 +688,12 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'ice' && msg.candidate) {
             const p = ensurePeer();
-            try { await p.addIceCandidate(msg.candidate); } catch {}
+            try {
+              await p.addIceCandidate(msg.candidate);
+              dbg('webrtc:ice-remote', 'candidate accepted', { mid: msg.candidate?.sdpMid, mline: msg.candidate?.sdpMLineIndex });
+            } catch (err) {
+              dbg('webrtc:ice-remote', 'candidate rejected', { err: String(err), candidate: msg.candidate?.candidate });
+            }
           }
         } catch {}
       }
