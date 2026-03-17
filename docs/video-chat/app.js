@@ -291,6 +291,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         else selectedPathReason = 'broader-path fallback';
       }
 
+      const hint = iceFailureHint();
       statsEl.textContent = [
         'connectionState: ' + pc.connectionState,
         'iceConnectionState: ' + pc.iceConnectionState,
@@ -307,12 +308,13 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         'remoteCandidate: ' + remoteIp,
         'localIPv6? ' + String(localIp.includes(':')),
         'peerIPv6? ' + String(remoteIp.includes(':')),
+        'hint: ' + hint,
       ].join('\n');
 
       if (pc.connectionState === 'connected') setState('direct', 'Connected (P2P)');
       else if (pc.connectionState === 'connecting') setState('connecting', 'Establishing P2P...');
       else if (['failed', 'disconnected'].includes(pc.connectionState)) {
-        setState('failed', 'Connection unstable/failed (check about:webrtc)');
+        setState('failed', 'ICE failed. ' + hint + ' See about:webrtc for deep details.');
       }
     }, 1000);
   };
@@ -390,10 +392,38 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const sendOffer = async (p, opts = {}) => {
     const offer = await p.createOffer(opts);
     await p.setLocalDescription(offer);
-    sendNip17(peerPubkey, { type: 'offer', sdp: offer });
+    await waitForIceGathering(p, 1400);
+    sendNip17(peerPubkey, { type: 'offer', sdp: p.localDescription || offer });
   };
 
   const wantsLocalMedia = () => camEnabled || !micMuted;
+
+  const iceFailureHint = () => {
+    const localTypes = new Set(localCandidates.map((c) => c?.type).filter(Boolean));
+    const remoteTypes = new Set(remoteCandidates.map((c) => c?.type).filter(Boolean));
+    if (!localCandidates.length || !remoteCandidates.length) return 'No viable ICE candidates yet; check STUN reachability and firewall UDP rules.';
+    if (localTypes.has('relay') || remoteTypes.has('relay')) return 'Relay candidate seen but STUN-only mode is active; peer NAT likely too strict for direct P2P.';
+    if (!localTypes.has('srflx') || !remoteTypes.has('srflx')) return 'Missing server-reflexive candidates; one peer may be behind restrictive NAT.';
+    return 'Direct path negotiation failed; likely incompatible NAT pair for STUN-only mode.';
+  };
+
+  const waitForIceGathering = async (peer, timeoutMs = 1400) => {
+    const done = () => peer.iceGatheringState === 'complete';
+    if (done()) return;
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        peer.removeEventListener('icegatheringstatechange', onChange);
+        resolve(undefined);
+      }, timeoutMs);
+      const onChange = () => {
+        if (!done()) return;
+        clearTimeout(timer);
+        peer.removeEventListener('icegatheringstatechange', onChange);
+        resolve(undefined);
+      };
+      peer.addEventListener('icegatheringstatechange', onChange);
+    });
+  };
 
   const startOrJoin = async () => {
     if (!peerPubkey || !peerReachable) return;
@@ -420,7 +450,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
       const answer = await p.createAnswer();
       await p.setLocalDescription(answer);
-      sendNip17(peerPubkey, { type: 'answer', sdp: answer });
+      await waitForIceGathering(p, 900);
+      sendNip17(peerPubkey, { type: 'answer', sdp: p.localDescription || answer });
       pendingRemoteOffer = null;
     } else {
       await sendOffer(p);
