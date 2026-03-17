@@ -173,8 +173,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const signalTagsFor = (body, toPubkey) => {
-    const tags = [['p', toPubkey], ['session', sessionId], ['stun', 'forward']];
-    const t = body?.type;
+    const t = String(body?.type || 'signal');
+    const tags = [
+      ['p', toPubkey],
+      ['session', sessionId],
+      ['stun', 'forward'],
+      // standard hashtag tags for relays/classifiers that only inspect `t`
+      ['t', 'webrtc'],
+      ['t', t],
+      ['t', 'call-signal'],
+    ];
     if (t === 'offer' || t === 'answer') {
       tags.push(['webrtc', t]);
       const ufrag = extractUfrag(body?.sdp);
@@ -189,7 +197,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       const parsed = parseCandidate(candStr);
       if (parsed?.type) tags.push(['candidate_type', String(parsed.type)]);
     } else {
-      tags.push(['webrtc', String(t || 'signal')]);
+      tags.push(['webrtc', t]);
     }
     return tags;
   };
