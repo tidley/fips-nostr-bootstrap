@@ -931,4 +931,3 @@ server.listen(port, () => {
   console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}`, relays: relayList }, null, 2));
 });
 ;
-});
