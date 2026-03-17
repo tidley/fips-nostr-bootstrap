@@ -6,6 +6,7 @@ This repo now contains a working prototype of:
 2. **UDP hole punching** (simultaneous outbound probe window)
 3. **Direct UDP test traffic** after establishment
 4. **Duplex stream simulation** (~10MB each way by default)
+5. **STUN-only WebRTC signaling + diagnostics**
 
 > Note: this is transport/rendezvous engineering work. It is **not** a FIPS 140 validation claim.
 
@@ -18,6 +19,9 @@ This repo now contains a working prototype of:
 - ✅ Hole punching works in tested environment
 - ✅ Duplex 10MB each-way simulation works
 - ✅ Quick latency benchmark runs after punch
+- ✅ STUN probe test (live binding-response) in CI-style local runs
+- ✅ Standalone STUN-lite server for public-IP A/B testing
+- ✅ Call-signaling tag classification aligned for chapar relay debug/inspection
 
 Known caveats:
 - NAT behavior varies; symmetric NAT may still require fallback relay paths
@@ -170,6 +174,11 @@ go run .            # listens on :3478 by default
 
 This server only handles STUN Binding Requests and replies with XOR-MAPPED-ADDRESS.
 
+Operational notes:
+- Intended for public-IP deployment (e.g., Vultr) for STUN-only testing.
+- Keep `3478/udp` open.
+- Prefer systemd for always-on operation.
+
 ## Simple web video chat demo (static / GitHub Pages friendly)
 
 A lightweight browser-to-browser video call demo is included as a static page:
@@ -219,15 +228,37 @@ QR notes:
 
 Notes:
 - Video signaling now uses DM-like kind `1059` events over relays (no local ws signaling path).
-- Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) for relay-side PoC inspection.
+- Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) and `#t` tags for relay-side PoC inspection/classification.
 - Uses WebRTC STUN-only media traversal with env-configurable STUN endpoint (default: `stun:45.77.228.152:3478`).
 - Set `FIPS_STUN_URL=stun:<host>:<port>` to use your self-hosted STUN service.
 - Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
+- Join flow now auto-acquires local media when possible before sending offer/answer.
+- If media permission is denied, UI explicitly reports joined receive-only mode.
+- Remote ICE candidates are queued until remote description is set (avoids `InvalidStateError` race).
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
+- Added deeper browser diagnostics for ICE gather lifecycle, transceivers/senders, and SDP direction snapshots.
 - FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
 - Local preview is smaller; remote video is larger.
 - Remote video now adapts to sender aspect ratio (e.g., laptop landscape on phone receivers).
 - Prototype quality: no auth hardening/recording yet.
+
+## Planned integration with `jmcorgan/fips`
+
+This repo is converging on a clean split:
+
+- **NIP-17 + STUN bootstrap plane (this repo)**
+- **FIPS secure session/data plane (`jmcorgan/fips`)**
+
+Planned handoff model:
+1. NIP-17 DM request/accept and session negotiation.
+2. Candidate exchange and direct path establishment.
+3. Bootstrap transcript finalization (session id, peer keys, selected path metadata).
+4. Handoff into `fips` runtime as the transport/session engine.
+
+Near-term deliverables:
+- bootstrap transcript schema for adapter consumption
+- minimal `nostr-bootstrap` adapter interface suitable for `fips`
+- integration tests for replay/expiry and successful bootstrap->session handoff
 
 ## SSH-like demos
 

@@ -1,6 +1,6 @@
 # NEXT
 
-1. Add retry/backoff module + tests.
-2. Add key lifecycle helper module + tests.
-3. Add wire-format codec (kinds/tags) + conformance fixtures.
-4. Add minimal relay signaling adapter interface.
+1. Add “single-offerer lock” to avoid glare (`Unknown ufrag` churn).
+2. Add structured browser diagnostics export (one-click JSON).
+3. Build minimal `nostr-bootstrap` adapter package intended for `jmcorgan/fips`.
+4. Add integration tests for bootstrap->FIPS handoff with replay/expiry cases.

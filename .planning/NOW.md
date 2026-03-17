@@ -1,6 +1,16 @@
 # NOW
 
-1. Add retry/backoff module + tests.
-2. Add key lifecycle helper module + tests.
-3. Add wire-format codec (kinds/tags) + conformance fixtures.
-4. Add FIPS naming alignment pass across docs/code identifiers.
+1. Finish video media-flow reliability pass:
+   - verify transceiver/sender logs on both peers
+   - remove stale/misleading failure hint when connected
+   - ensure no glare/offer overlap regressions
+
+2. Document and lock STUN-lite production runbook on Vultr:
+   - systemd service
+   - firewall and health checks
+   - basic troubleshooting matrix
+
+3. Draft `jmcorgan/fips` integration adapter:
+   - NIP-17 bootstrap transcript schema
+   - handshake state transitions
+   - handoff contract to FIPS session/data plane
