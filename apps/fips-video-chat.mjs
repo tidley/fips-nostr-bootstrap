@@ -161,7 +161,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 (() => {
   const RELAYS = ${JSON.stringify(relayList)};
   const APP = 'fips.video.v1';
-  const STUN_URL = ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:nip17.tomdwyer.uk:3478')};
+  const STUN_URL = ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478')};
   const SIGNAL_KIND = Number(${JSON.stringify(process.env.FIPS_SIGNAL_KIND || '1059')});
 
   const dbg = (stage, message, extra) => {

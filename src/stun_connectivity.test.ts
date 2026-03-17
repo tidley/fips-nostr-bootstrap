@@ -55,7 +55,7 @@ async function probeStun(stunUrl: string, timeoutMs = 3000): Promise<Buffer> {
 }
 
 describe('STUN connectivity', () => {
-  const stunUrl = process.env.FIPS_STUN_URL || 'stun:nip17.tomdwyer.uk:3478';
+  const stunUrl = process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478';
 
   test('STUN URL is parseable', () => {
     const parsed = parseStunUrl(stunUrl);

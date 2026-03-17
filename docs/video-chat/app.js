@@ -18,7 +18,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const fromGlobal = Array.isArray(window.FIPS_VIDEO_RELAYS) ? window.FIPS_VIDEO_RELAYS : null;
   const RELAYS = (fromGlobal && fromGlobal.length ? fromGlobal : (fromQuery && fromQuery.length ? fromQuery : DEFAULT_RELAYS));
   const APP = 'fips.video.v1';
-  const STUN_URL = String(window.FIPS_STUN_URL || 'stun:nip17.tomdwyer.uk:3478');
+  const STUN_URL = String(window.FIPS_STUN_URL || 'stun:45.77.228.152:3478');
   const SIGNAL_KIND = Number(window.FIPS_SIGNAL_KIND || 1059);
 
   const dbg = (stage, message, extra) => {

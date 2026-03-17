@@ -48,7 +48,7 @@ NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip
 # NOSTR_NSEC=nsec1...
 # Optional endpoint overrides:
 # FIPS_UDP_PUBLIC_HOST=...
-# FIPS_STUN_URL=stun:nip17.tomdwyer.uk:3478
+# FIPS_STUN_URL=stun:45.77.228.152:3478
 EOF
 ```
 
@@ -153,6 +153,23 @@ This is the reusable library layer for trusted-npub rendezvous + punch establish
 
 ---
 
+## Tiny standalone STUN server (binding-only)
+
+For A/B testing outside chapar, a minimal standalone STUN server is included at:
+
+- `tools/stun-lite/main.go`
+
+Run on a public host:
+
+```bash
+cd tools/stun-lite
+go mod tidy
+go run .            # listens on :3478 by default
+# or: STUN_ADDR=":3478" go run .
+```
+
+This server only handles STUN Binding Requests and replies with XOR-MAPPED-ADDRESS.
+
 ## Simple web video chat demo (static / GitHub Pages friendly)
 
 A lightweight browser-to-browser video call demo is included as a static page:
@@ -203,7 +220,7 @@ QR notes:
 Notes:
 - Video signaling now uses DM-like kind `1059` events over relays (no local ws signaling path).
 - Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) for relay-side PoC inspection.
-- Uses WebRTC STUN-only media traversal with env-configurable STUN endpoint (default: `stun:nip17.tomdwyer.uk:3478`).
+- Uses WebRTC STUN-only media traversal with env-configurable STUN endpoint (default: `stun:45.77.228.152:3478`).
 - Set `FIPS_STUN_URL=stun:<host>:<port>` to use your self-hosted STUN service.
 - Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
