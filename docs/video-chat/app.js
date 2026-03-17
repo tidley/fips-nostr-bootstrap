@@ -399,6 +399,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
   };
 
+  const autoEnableMediaForJoin = () => {
+    if (!localStream) return;
+    if (!camEnabled && micMuted) {
+      camEnabled = true;
+      localStream.getVideoTracks().forEach((t) => (t.enabled = true));
+      camBtn.classList.toggle('off', !camEnabled);
+      setState('connecting', 'Auto-enabled camera for join');
+    }
+  };
+
   const flushPendingRemoteIce = async (p) => {
     if (!pendingRemoteIce.length) return;
     dbg('webrtc:ice-remote', 'flushing queued candidates', { count: pendingRemoteIce.length });
@@ -482,15 +492,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     setState('connecting', 'Phase 1/3: signaling ready');
 
-    if (!localStream && wantsLocalMedia()) {
+    if (!localStream) {
       try {
         await startCamera();
+        autoEnableMediaForJoin();
       } catch (e) {
         const secureHint = (!window.isSecureContext || location.protocol !== 'https:')
           ? ' (requires HTTPS/secure context)'
           : '';
-        setState('connecting', 'Local media blocked; continuing receive-only' + secureHint);
+        setState('connecting', 'Joined receive-only (camera/mic permission denied)' + secureHint);
       }
+    } else {
+      autoEnableMediaForJoin();
     }
 
     const p = ensurePeer();

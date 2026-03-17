@@ -528,6 +528,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     if (localStream) {
       for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
+    } else {
+      try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
+      try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
     }
 
     return pc;
@@ -544,6 +547,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     for (const t of localStream.getAudioTracks()) t.enabled = !micMuted;
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
     dbg('media:getUserMedia', 'local media ready', { audioTracks: localStream.getAudioTracks().length, videoTracks: localStream.getVideoTracks().length });
+  };
+
+  const autoEnableMediaForJoin = () => {
+    if (!localStream) return;
+    if (!camEnabled && micMuted) {
+      camEnabled = true;
+      localStream.getVideoTracks().forEach((t) => (t.enabled = true));
+      camBtn.classList.toggle('off', !camEnabled);
+      setState('connecting', 'Auto-enabled camera for join');
+    }
   };
 
   const iceFailureHint = () => {
@@ -620,7 +633,17 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
       return;
     }
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (!localStream) await startCamera();
+    if (!localStream) {
+      try {
+        await startCamera();
+        autoEnableMediaForJoin();
+      } catch (err) {
+        dErr('media:getUserMedia', 'permission denied, continuing receive-only', err);
+        setState('connecting', 'Joined receive-only (camera/mic permission denied)');
+      }
+    } else {
+      autoEnableMediaForJoin();
+    }
     const p = ensurePeer();
     callStartedAt = Date.now();
 
