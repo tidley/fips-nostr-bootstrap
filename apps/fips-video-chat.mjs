@@ -148,14 +148,16 @@ const html = `<!doctype html>
   </dialog>
 
 <script type="module">
-import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'https://esm.sh/nostr-tools@2.17.0';
-import { wrapEvent, unwrapEvent } from 'https://esm.sh/nostr-tools@2.17.0/nip17';
+import { SimplePool, generateSecretKey, getPublicKey, nip19, finalizeEvent } from 'https://esm.sh/nostr-tools@2.17.0';
+import { unwrapEvent } from 'https://esm.sh/nostr-tools@2.17.0/nip17';
 import jsQR from 'https://esm.sh/jsqr@1.4.0';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
 (() => {
   const RELAYS = ${JSON.stringify(relayList)};
   const APP = 'fips.video.v1';
+  const STUN_URL = ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:nip17.tomdwyer.uk:3478')};
+  const SIGNAL_KIND = Number(${JSON.stringify(process.env.FIPS_SIGNAL_KIND || '1059')});
 
   const connBadge = document.getElementById('connBadge');
   const overlayStatus = document.getElementById('overlayStatus');
@@ -210,6 +212,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   let pendingRemoteOffer = null;
   let selectedPathReason = 'n/a';
+  let sessionId = (globalThis.crypto?.randomUUID?.() || ('sess-' + Math.random().toString(36).slice(2)));
   const localCandidates = [];
   const remoteCandidates = [];
   const pendingRequests = new Map();
@@ -275,8 +278,41 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     return bits.toString(16).padStart(16, '0');
   };
 
+  const extractUfrag = (sdp) => {
+    const m = String(sdp?.sdp || sdp || '').match(/a=ice-ufrag:([^\r\n]+)/);
+    return m ? m[1].trim() : '';
+  };
+
+  const signalTagsFor = (body, toPubkey) => {
+    const tags = [['p', toPubkey], ['session', sessionId], ['stun', 'forward']];
+    const t = body?.type;
+    if (t === 'offer' || t === 'answer') {
+      tags.push(['webrtc', t]);
+      const ufrag = extractUfrag(body?.sdp);
+      if (ufrag) tags.push(['ufrag', ufrag]);
+    } else if (t === 'ice') {
+      tags.push(['webrtc', 'ice']);
+      const c = body?.candidate;
+      const candStr = c?.candidate || '';
+      if (candStr) tags.push(['candidate', candStr]);
+      if (c?.sdpMid != null) tags.push(['mid', String(c.sdpMid)]);
+      if (c?.sdpMLineIndex != null) tags.push(['mline', String(c.sdpMLineIndex)]);
+      const parsed = parseCandidate(candStr);
+      if (parsed?.type) tags.push(['candidate_type', String(parsed.type)]);
+    } else {
+      tags.push(['webrtc', String(t || 'signal')]);
+    }
+    return tags;
+  };
+
   const sendNip17 = (toPubkey, body) => {
-    const event = wrapEvent(sk, { publicKey: toPubkey }, JSON.stringify({ app: APP, ...body }));
+    const payload = { app: APP, session: sessionId, ...body };
+    const event = finalizeEvent({
+      kind: SIGNAL_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: signalTagsFor(body, toPubkey),
+      content: JSON.stringify(payload)
+    }, sk);
     Promise.allSettled(pool.publish(RELAYS, event)).catch(() => undefined);
   };
 
@@ -384,7 +420,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const ensurePeer = () => {
     if (pc) return pc;
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc = new RTCPeerConnection({ iceServers: [{ urls: STUN_URL }] });
     startStatsLoop();
 
     pc.onicecandidate = (e) => {
@@ -529,6 +565,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const sendRequest = () => {
     const npub = peerNpubEl.value.trim();
     if (!npub.startsWith('npub')) return setState('failed', 'Invalid peer npub');
+    sessionId = (globalThis.crypto?.randomUUID?.() || ('sess-' + Math.random().toString(36).slice(2)));
     peerNpub = npub;
     peerPubkey = npubToPubkey(npub);
     sendNip17(peerPubkey, { type:'request_connect', ts: Date.now() });
@@ -536,14 +573,21 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const listen = () => {
-    pool.subscribeMany(RELAYS, { kinds:[1059], '#p':[pub], since: Math.floor(Date.now()/1000) - 3*24*60*60 }, {
+    pool.subscribeMany(RELAYS, { kinds:[SIGNAL_KIND], '#p':[pub], since: Math.floor(Date.now()/1000) - 3*24*60*60 }, {
       onevent: async (evt) => {
         try {
-          const rumor = unwrapEvent(evt, sk);
-          const msg = JSON.parse(rumor.content);
-          if (!msg || msg.app !== APP) return;
+          let msg = null;
+          let fromPubkey = '';
+          try {
+            const rumor = unwrapEvent(evt, sk);
+            msg = JSON.parse(rumor.content);
+            fromPubkey = rumor.pubkey;
+          } catch {
+            msg = JSON.parse(evt.content);
+            fromPubkey = evt.pubkey;
+          }
 
-          const fromPubkey = rumor.pubkey;
+          if (!msg || msg.app !== APP) return;
           const fromNpub = nip19.npubEncode(fromPubkey);
 
           if (msg.type === 'request_connect') {
@@ -555,6 +599,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'request_accept') {
             if (peerPubkey && fromPubkey !== peerPubkey) return;
+            if (msg.session) sessionId = msg.session;
             peerPubkey = fromPubkey;
             peerNpub = fromNpub;
             allowedPeers.add(fromPubkey);
@@ -576,6 +621,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
           }
 
           if (msg.type === 'offer') {
+            if (msg.session) sessionId = msg.session;
             pendingRemoteOffer = { fromPubkey, sdp: msg.sdp };
             preCall.style.display = 'none';
             inCall.style.display = 'block';

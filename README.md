@@ -42,10 +42,13 @@ npm install
 ```bash
 cat > .env <<'EOF'
 NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk
+# Include modified Chapar relay for PoC signaling classification if needed:
+# NOSTR_RELAYS=wss://nip17.tomdwyer.uk,wss://<your-chapar-relay>
 # Optional fixed identity (recommended for stable npub):
 # NOSTR_NSEC=nsec1...
-# Optional endpoint override:
+# Optional endpoint overrides:
 # FIPS_UDP_PUBLIC_HOST=...
+# FIPS_STUN_URL=stun:nip17.tomdwyer.uk:3478
 EOF
 ```
 
@@ -178,8 +181,10 @@ QR notes:
 - Falls back to in-browser `jsQR` for broader support.
 
 Notes:
-- Video signaling now uses NIP-17 DMs over relays (no local ws signaling path).
-- Uses WebRTC + public STUN for media path traversal.
+- Video signaling now uses DM-like kind `1059` events over relays (no local ws signaling path).
+- Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) for relay-side PoC inspection.
+- Uses WebRTC STUN-only media traversal with env-configurable STUN endpoint (default: `stun:nip17.tomdwyer.uk:3478`).
+- Set `FIPS_STUN_URL=stun:<host>:<port>` to use your self-hosted STUN service.
 - Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
 - Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
 - FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
