@@ -367,6 +367,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     pc.onconnectionstatechange = () => {
       dbg('webrtc:conn', 'state changed', { connectionState: pc.connectionState, iceConnectionState: pc.iceConnectionState, iceGatheringState: pc.iceGatheringState });
       if (pc.connectionState === 'connected') {
+        logMediaState(pc, 'connected');
         reconnectAttempts = 0;
         iceRestartTried = false;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -426,6 +427,30 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     return 'Direct path negotiation failed; likely incompatible NAT pair for STUN-only mode.';
   };
 
+  const sdpMLineDirections = (sdpObj) => {
+    const sdp = String(sdpObj?.sdp || sdpObj || '');
+    const lines = sdp.split(/\r?\n/);
+    const out = [];
+    let cur = null;
+    for (const line of lines) {
+      if (line.startsWith('m=')) {
+        cur = { m: line.slice(2), dir: 'none' };
+        out.push(cur);
+      } else if (cur && /^a=(sendrecv|sendonly|recvonly|inactive)$/.test(line)) {
+        cur.dir = line.slice(2);
+      }
+    }
+    return out;
+  };
+
+  const logMediaState = (p, label = 'state') => {
+    const senders = p.getSenders().map((s, i) => ({ i, kind: s.track?.kind || 'none', enabled: Boolean(s.track?.enabled), readyState: s.track?.readyState || 'none' }));
+    const transceivers = p.getTransceivers().map((t, i) => ({ i, mid: t.mid, dir: t.direction, current: t.currentDirection }));
+    const localDirs = sdpMLineDirections(p.localDescription);
+    const remoteDirs = sdpMLineDirections(p.remoteDescription);
+    dbg('webrtc:media', label, { senders, transceivers, localDirs, remoteDirs });
+  };
+
   const waitForIceGathering = async (peer, timeoutMs = 1400) => {
     const done = () => peer.iceGatheringState === 'complete';
     if (done()) {
@@ -474,8 +499,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
     if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
+      logMediaState(p, 'after setRemoteDescription (offer)');
+      await flushPendingRemoteIce(p);
       const answer = await p.createAnswer();
       await p.setLocalDescription(answer);
+      logMediaState(p, 'after setLocalDescription (answer)');
       await waitForIceGathering(p, 900);
       sendNip17(peerPubkey, { type: 'answer', sdp: p.localDescription || answer });
       pendingRemoteOffer = null;
@@ -683,6 +711,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             const p = ensurePeer();
             dbg('webrtc:answer', 'applying remote answer');
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            logMediaState(p, 'after setRemoteDescription (answer)');
             await flushPendingRemoteIce(p);
             callActive = true;
             joinEndBtn.textContent = 'End call';
