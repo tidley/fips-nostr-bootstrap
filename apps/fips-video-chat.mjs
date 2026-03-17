@@ -256,6 +256,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let pendingRemoteOffer = null;
   let selectedPathReason = 'n/a';
   let sessionId = (globalThis.crypto?.randomUUID?.() || ('sess-' + Math.random().toString(36).slice(2)));
+  const pendingRemoteIce = [];
   const localCandidates = [];
   const remoteCandidates = [];
   const pendingRequests = new Map();
@@ -577,6 +578,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     });
   };
 
+  const flushPendingRemoteIce = async (p) => {
+    if (!pendingRemoteIce.length) return;
+    dbg('webrtc:ice-remote', 'flushing queued candidates', { count: pendingRemoteIce.length });
+    while (pendingRemoteIce.length) {
+      const c = pendingRemoteIce.shift();
+      try { await p.addIceCandidate(c); }
+      catch (err) { dErr('webrtc:ice-remote', 'queued candidate rejected', err, c); }
+    }
+  };
+
   const startOrJoin = async () => {
     dbg('call:start', 'startOrJoin invoked', { hasPeerPubkey: Boolean(peerPubkey), peerReachable, hasPendingOffer: Boolean(pendingRemoteOffer) });
     if (!peerPubkey || !peerReachable) {
@@ -591,6 +602,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (pendingRemoteOffer && pendingRemoteOffer.fromPubkey === peerPubkey) {
       dbg('call:start', 'applying pending remote offer + creating answer');
       await p.setRemoteDescription(new RTCSessionDescription(pendingRemoteOffer.sdp));
+      await flushPendingRemoteIce(p);
       const answer = await p.createAnswer();
       await p.setLocalDescription(answer);
       await waitForIceGathering(p, 900);
@@ -813,6 +825,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'ice' && msg.candidate) {
             const p = ensurePeer();
+            if (!p.remoteDescription) {
+              pendingRemoteIce.push(msg.candidate);
+              dbg('webrtc:ice-remote', 'queued (no remoteDescription yet)', { queued: pendingRemoteIce.length });
+              return;
+            }
             try {
               await p.addIceCandidate(msg.candidate);
               dbg('webrtc:ice-remote', 'candidate accepted');
@@ -912,4 +929,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, () => {
   console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}`, relays: relayList }, null, 2));
+});
+;
 });

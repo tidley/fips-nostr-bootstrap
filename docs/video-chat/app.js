@@ -107,6 +107,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   let pendingRemoteOffer = null;
   let selectedPathReason = 'n/a';
   let sessionId = (globalThis.crypto?.randomUUID?.() || ('sess-' + Math.random().toString(36).slice(2)));
+  const pendingRemoteIce = [];
   const localCandidates = [];
   const remoteCandidates = [];
   const pendingRequests = new Map();
@@ -397,6 +398,16 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     if (pc) for (const t of localStream.getTracks()) pc.addTrack(t, localStream);
   };
 
+  const flushPendingRemoteIce = async (p) => {
+    if (!pendingRemoteIce.length) return;
+    dbg('webrtc:ice-remote', 'flushing queued candidates', { count: pendingRemoteIce.length });
+    while (pendingRemoteIce.length) {
+      const c = pendingRemoteIce.shift();
+      try { await p.addIceCandidate(c); }
+      catch (err) { dbg('webrtc:ice-remote', 'queued candidate rejected', { err: String(err), candidate: c?.candidate }); }
+    }
+  };
+
   const sendOffer = async (p, opts = {}) => {
     const offer = await p.createOffer(opts);
     await p.setLocalDescription(offer);
@@ -672,6 +683,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
             const p = ensurePeer();
             dbg('webrtc:answer', 'applying remote answer');
             await p.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            await flushPendingRemoteIce(p);
             callActive = true;
             joinEndBtn.textContent = 'End call';
             joinEndBtn.classList.remove('primary');
@@ -688,6 +700,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
           if (msg.type === 'ice' && msg.candidate) {
             const p = ensurePeer();
+            if (!p.remoteDescription) {
+              pendingRemoteIce.push(msg.candidate);
+              dbg('webrtc:ice-remote', 'queued (no remoteDescription yet)', { queued: pendingRemoteIce.length });
+              return;
+            }
             try {
               await p.addIceCandidate(msg.candidate);
               dbg('webrtc:ice-remote', 'candidate accepted', { mid: msg.candidate?.sdpMid, mline: msg.candidate?.sdpMLineIndex });
