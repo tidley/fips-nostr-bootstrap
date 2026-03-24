@@ -61,14 +61,15 @@ export function unwrapRendezvousMessage(recipientSk: Uint8Array, event: Paramete
   };
 }
 
-function hasWireMeta(msg: Record<string, unknown>): msg is WireMeta {
+function hasWireMeta(msg: unknown): msg is WireMeta {
+  const m = msg as Partial<WireMeta>;
   return (
-    msg.version === '1.0' &&
-    typeof msg.sessionId === 'string' &&
-    msg.sessionId.length > 0 &&
-    typeof msg.nonce === 'string' &&
-    msg.nonce.length > 0 &&
-    typeof msg.issuedAt === 'number'
+    m?.version === '1.0' &&
+    typeof m.sessionId === 'string' &&
+    m.sessionId.length > 0 &&
+    typeof m.nonce === 'string' &&
+    m.nonce.length > 0 &&
+    typeof m.issuedAt === 'number'
   );
 }
 
