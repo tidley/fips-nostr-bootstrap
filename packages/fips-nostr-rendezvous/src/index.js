@@ -192,7 +192,14 @@ export class FipsNostrRendezvousNode extends EventEmitter {
                 }),
               );
 
-              publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: rumor.pubkey, obj: reply });
+              publishDM({
+                pool: this.pool,
+                relays: this.relays,
+                sk: this.sk,
+                recipientPubkey: rumor.pubkey,
+                obj: reply,
+                logContext: { kind: 'server-info', nonce: reply.nonce, sessionId: reply.sessionId, toPubkey: rumor.pubkey },
+              });
 
               console.log(
                 '[rendezvous] server-info published',
@@ -272,7 +279,14 @@ export class FipsNostrRendezvousNode extends EventEmitter {
           reject(new Error('timed out waiting for server-info'));
           return;
         }
-        publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: targetPubkey, obj: hello });
+        publishDM({
+          pool: this.pool,
+          relays: this.relays,
+          sk: this.sk,
+          recipientPubkey: targetPubkey,
+          obj: hello,
+          logContext: { kind: 'hello-retry', nonce: helloNonce, sessionId: hello.sessionId, toPubkey: targetPubkey },
+        });
       }, retryMs);
     });
 
@@ -322,6 +336,15 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.sub?.close();
     this.pool?.close(this.relays);
     for (const s of this.sessions.values()) s.close();
+    this.sessions.clear();
+    this.socket.close();
+  }
+}
+
+export function createFipsNostrRendezvousNode(options) {
+  return new FipsNostrRendezvousNode(options);
+}
+  for (const s of this.sessions.values()) s.close();
     this.sessions.clear();
     this.socket.close();
   }

@@ -7,7 +7,7 @@ import { isHelloMessage, isServerInfoMessage } from './rendezvous_nip17.js';
 const runLiveServer = process.env.RUN_LIVE_SERVER_ROUNDTRIP !== '0';
 const describeLive = describe;
 
-const RELAYS = (process.env.FIPS_TEST_RELAYS || 'wss://nos.lol,wss://nip17.tomdwyer.uk')
+const RELAYS = (process.env.FIPS_TEST_RELAYS || 'wss://nip17.tomdwyer.uk')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
