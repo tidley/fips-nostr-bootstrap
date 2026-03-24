@@ -328,6 +328,9 @@ npm run daemon -- --role all --fips-udp-port 9999 --relays wss://nos.lol --stun-
 Notes:
 - `fips`/`relay` currently share the rendezvous node implementation (`packages/fips-nostr-rendezvous`).
 - `stun` role supervises `tools/stun-lite` via `go run main.go` by default.
+- Port preflight checks are enabled by default (UDP bind checks for required role ports).
+- Disable preflight checks only when needed: `--no-check-ports`.
+- On port check failures, daemon prints troubleshooting commands (`ss`, `lsof`, `ufw`, `nft`).
 - Override STUN process command with `--stun-cmd`, `--stun-args`, `--stun-cwd` (or `STUN_CMD`, `STUN_ARGS`, `STUN_CWD`).
 
 ## Dev
