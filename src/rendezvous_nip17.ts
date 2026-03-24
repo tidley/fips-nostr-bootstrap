@@ -1,20 +1,46 @@
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 
-export interface HelloMessage {
-  type: 'fips.udp.test.hello';
-  nonce: string;
-  want: 'udp-endpoint';
-}
+export type RendezvousMessageType = 'fips.rendezvous.hello' | 'fips.rendezvous.server-info' | 'fips.rendezvous.error';
 
-export interface ServerInfoMessage {
-  type: 'fips.udp.test.server-info';
+export interface WireMeta {
+  version: '1.0';
+  sessionId: string;
   nonce: string;
-  endpoint: { host: string; port: number };
   issuedAt: number;
 }
 
-export type RendezvousMessage = HelloMessage | ServerInfoMessage;
+export interface HelloMessage extends WireMeta {
+  type: 'fips.rendezvous.hello';
+  clientEndpoint?: { host: string; port: number };
+  wants: {
+    stunInfo: boolean;
+    fipsConnect: boolean;
+  };
+  capabilities?: string[];
+}
+
+export interface ServerInfoMessage extends WireMeta {
+  type: 'fips.rendezvous.server-info';
+  endpoint: { host: string; port: number };
+  punch?: {
+    startAtMs: number;
+    intervalMs: number;
+    durationMs: number;
+  };
+  stun?: {
+    uri: string;
+    metadataTag?: string;
+  };
+}
+
+export interface ErrorMessage extends WireMeta {
+  type: 'fips.rendezvous.error';
+  code: 'bad-request' | 'untrusted-peer' | 'unsupported-version' | 'internal-error';
+  message: string;
+}
+
+export type RendezvousMessage = HelloMessage | ServerInfoMessage | ErrorMessage;
 
 export function generateEphemeralIdentity() {
   const sk = generateSecretKey();
@@ -35,18 +61,44 @@ export function unwrapRendezvousMessage(recipientSk: Uint8Array, event: Paramete
   };
 }
 
+function hasWireMeta(msg: Record<string, unknown>): msg is WireMeta {
+  return (
+    msg.version === '1.0' &&
+    typeof msg.sessionId === 'string' &&
+    msg.sessionId.length > 0 &&
+    typeof msg.nonce === 'string' &&
+    msg.nonce.length > 0 &&
+    typeof msg.issuedAt === 'number'
+  );
+}
+
 export function isHelloMessage(msg: unknown): msg is HelloMessage {
-  const m = msg as Partial<HelloMessage>;
-  return m?.type === 'fips.udp.test.hello' && typeof m.nonce === 'string' && m.want === 'udp-endpoint';
+  const m = msg as Partial<HelloMessage> & Record<string, unknown>;
+  return (
+    m?.type === 'fips.rendezvous.hello' &&
+    hasWireMeta(m) &&
+    typeof m.wants === 'object' &&
+    typeof m.wants?.stunInfo === 'boolean' &&
+    typeof m.wants?.fipsConnect === 'boolean'
+  );
 }
 
 export function isServerInfoMessage(msg: unknown): msg is ServerInfoMessage {
-  const m = msg as Partial<ServerInfoMessage>;
+  const m = msg as Partial<ServerInfoMessage> & Record<string, unknown>;
   return (
-    m?.type === 'fips.udp.test.server-info' &&
-    typeof m.nonce === 'string' &&
+    m?.type === 'fips.rendezvous.server-info' &&
+    hasWireMeta(m) &&
     typeof m.endpoint?.host === 'string' &&
-    typeof m.endpoint?.port === 'number' &&
-    typeof m.issuedAt === 'number'
+    typeof m.endpoint?.port === 'number'
+  );
+}
+
+export function isErrorMessage(msg: unknown): msg is ErrorMessage {
+  const m = msg as Partial<ErrorMessage> & Record<string, unknown>;
+  return (
+    m?.type === 'fips.rendezvous.error' &&
+    hasWireMeta(m) &&
+    typeof m.code === 'string' &&
+    typeof m.message === 'string'
   );
 }
