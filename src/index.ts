@@ -11,3 +11,4 @@ export * from './metrics.js';
 export * from './test_harness.js';
 export * from './demoEngine.js';
 export * from './rendezvous_nip17.js';
+export * from './runtime_roles.js';
