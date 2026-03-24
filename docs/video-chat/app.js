@@ -18,7 +18,15 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const fromGlobal = Array.isArray(window.FIPS_VIDEO_RELAYS) ? window.FIPS_VIDEO_RELAYS : null;
   const RELAYS = (fromGlobal && fromGlobal.length ? fromGlobal : (fromQuery && fromQuery.length ? fromQuery : DEFAULT_RELAYS));
   const APP = 'fips.video.v1';
-  const STUN_URL = String(window.FIPS_STUN_URL || 'stun:45.77.228.152:3478');
+  const DEFAULT_STUN_URLS = [
+    String(window.FIPS_STUN_URL || 'stun:45.77.228.152:3478'),
+    'stun:stun.l.google.com:19302',
+    'stun:stun1.l.google.com:19302',
+    'stun:stun.cloudflare.com:3478',
+  ];
+  const ICE_SERVERS = Array.isArray(window.FIPS_VIDEO_ICE_SERVERS) && window.FIPS_VIDEO_ICE_SERVERS.length
+    ? window.FIPS_VIDEO_ICE_SERVERS
+    : [{ urls: DEFAULT_STUN_URLS }];
   const SIGNAL_KIND = Number(window.FIPS_SIGNAL_KIND || 1059);
 
   const dbg = (stage, message, extra) => {
@@ -328,7 +336,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const ensurePeer = () => {
     if (pc) return pc;
-    pc = new RTCPeerConnection({ iceServers: [{ urls: STUN_URL }] });
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    dbg('webrtc:peer', 'creating RTCPeerConnection', { iceServers: ICE_SERVERS });
     startStatsLoop();
 
     pc.onicecandidate = (e) => {
@@ -436,7 +445,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const remoteTypes = new Set(remoteCandidates.map((c) => c?.type).filter(Boolean));
     if (!localCandidates.length || !remoteCandidates.length) return 'No viable ICE candidates yet; check STUN reachability and firewall UDP rules.';
     if (localTypes.has('relay') || remoteTypes.has('relay')) return 'Relay candidate seen but STUN-only mode is active; peer NAT likely too strict for direct P2P.';
-    if (!localTypes.has('srflx') || !remoteTypes.has('srflx')) return 'Missing server-reflexive candidates; one peer may be behind restrictive NAT.';
+    if (!localTypes.has('srflx') || !remoteTypes.has('srflx')) return 'Missing server-reflexive candidates; STUN may be blocked or unreachable. Try another STUN server or add TURN via FIPS_VIDEO_ICE_SERVERS.';
     return 'Direct path negotiation failed; likely incompatible NAT pair for STUN-only mode.';
   };
 
