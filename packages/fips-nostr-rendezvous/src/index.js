@@ -86,6 +86,8 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.punchIntervalMs = opts.punchIntervalMs || 300;
     this.punchDurationMs = opts.punchDurationMs || 30000;
     this.punchStartDelayMs = opts.punchStartDelayMs || 3000;
+    this.stunPort = opts.stunPort || 3478;
+    this.stunUri = opts.stunUri || null;
 
     this.sk = opts.nsec ? nip19.decode(opts.nsec).data : generateSecretKey();
     this.pubkey = getPublicKey(this.sk);
@@ -155,20 +157,65 @@ export class FipsNostrRendezvousNode extends EventEmitter {
               return;
             }
 
-            if (msg?.type === 'fips.rendezvous.hello' && msg?.nonce && msg?.clientEndpoint) {
+            if (msg?.type === 'fips.rendezvous.hello' && msg?.nonce) {
               const local = this.socket.address();
+              const now = Date.now();
+              const host = publicHostHint(this.publicHost);
+              const wants = msg?.wants || {};
+              const punch = {
+                startAtMs: now + this.punchStartDelayMs,
+                intervalMs: this.punchIntervalMs,
+                durationMs: this.punchDurationMs,
+              };
+
               const reply = {
                 type: 'fips.rendezvous.server-info',
+                version: '1.0',
+                sessionId: msg.sessionId || msg.nonce,
                 nonce: msg.nonce,
-                endpoint: { host: publicHostHint(this.publicHost), port: local.port },
-                punch: {
-                  startAtMs: Date.now() + this.punchStartDelayMs,
-                  intervalMs: this.punchIntervalMs,
-                  durationMs: this.punchDurationMs,
-                },
+                issuedAt: now,
+                endpoint: { host, port: local.port },
+                ...(wants.stunInfo
+                  ? { stun: { uri: this.stunUri || `stun:${host}:${this.stunPort}`, metadataTag: 'stun' } }
+                  : {}),
+                ...(wants.fipsConnect ? { punch } : {}),
               };
-              publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: rumor.pubkey, obj: reply });
-              this._startPunch(msg.nonce, msg.clientEndpoint, reply.punch);
+
+              console.log(
+                '[rendezvous] hello received',
+                JSON.stringify({
+                  fromNpub,
+                  nonce: msg.nonce,
+                  sessionId: msg.sessionId || msg.nonce,
+                  wants,
+                  hasClientEndpoint: Boolean(msg?.clientEndpoint?.host && msg?.clientEndpoint?.port),
+                }),
+              );
+
+              publishDM({
+                pool: this.pool,
+                relays: this.relays,
+                sk: this.sk,
+                recipientPubkey: rumor.pubkey,
+                obj: reply,
+                logContext: { kind: 'server-info', nonce: reply.nonce, sessionId: reply.sessionId, toPubkey: rumor.pubkey },
+              });
+
+              console.log(
+                '[rendezvous] server-info published',
+                JSON.stringify({
+                  toPubkey: rumor.pubkey,
+                  nonce: reply.nonce,
+                  sessionId: reply.sessionId,
+                  endpoint: reply.endpoint,
+                  hasStun: Boolean(reply.stun),
+                  hasPunch: Boolean(reply.punch),
+                }),
+              );
+
+              if (wants.fipsConnect && msg?.clientEndpoint?.host && msg?.clientEndpoint?.port) {
+                this._startPunch(msg.nonce, msg.clientEndpoint, punch);
+              }
             }
           } catch {
             // ignore
@@ -189,7 +236,11 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     const helloNonce = nonce();
     const hello = {
       type: 'fips.rendezvous.hello',
+      version: '1.0',
+      sessionId: helloNonce,
       nonce: helloNonce,
+      issuedAt: Date.now(),
+      wants: { stunInfo: true, fipsConnect: true },
       clientEndpoint: { host: publicHostHint(this.publicHost), port: local.port },
     };
 
@@ -228,7 +279,14 @@ export class FipsNostrRendezvousNode extends EventEmitter {
           reject(new Error('timed out waiting for server-info'));
           return;
         }
-        publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: targetPubkey, obj: hello });
+        publishDM({
+          pool: this.pool,
+          relays: this.relays,
+          sk: this.sk,
+          recipientPubkey: targetPubkey,
+          obj: hello,
+          logContext: { kind: 'hello-retry', nonce: helloNonce, sessionId: hello.sessionId, toPubkey: targetPubkey },
+        });
       }, retryMs);
     });
 
@@ -278,6 +336,15 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.sub?.close();
     this.pool?.close(this.relays);
     for (const s of this.sessions.values()) s.close();
+    this.sessions.clear();
+    this.socket.close();
+  }
+}
+
+export function createFipsNostrRendezvousNode(options) {
+  return new FipsNostrRendezvousNode(options);
+}
+  for (const s of this.sessions.values()) s.close();
     this.sessions.clear();
     this.socket.close();
   }

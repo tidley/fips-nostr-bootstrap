@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "daemon": "npm run build && node apps/fips-daemon.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "demo:preflight": "npm run build && node scripts/demo.mjs preflight",
@@ -15,6 +16,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.12",
+    "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^1.6.1",
     "typescript": "^5.6.3",
     "vitest": "^1.6.1"

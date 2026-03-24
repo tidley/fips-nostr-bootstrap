@@ -11,7 +11,7 @@ const port = Number(arg('--port', '8088'));
 const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
-const html = `<!doctype html>
+const rawHtml = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -161,7 +161,15 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 (() => {
   const RELAYS = ${JSON.stringify(relayList)};
   const APP = 'fips.video.v1';
-  const STUN_URL = ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478')};
+  const DEFAULT_STUN_URLS = [
+    ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478')},
+    'stun:stun.l.google.com:19302',
+    'stun:stun1.l.google.com:19302',
+    'stun:stun.cloudflare.com:3478',
+  ];
+  const ICE_SERVERS = Array.isArray(window.FIPS_VIDEO_ICE_SERVERS) && window.FIPS_VIDEO_ICE_SERVERS.length
+    ? window.FIPS_VIDEO_ICE_SERVERS
+    : [{ urls: DEFAULT_STUN_URLS }];
   const SIGNAL_KIND = Number(${JSON.stringify(process.env.FIPS_SIGNAL_KIND || '1059')});
 
   const dbg = (stage, message, extra) => {
@@ -475,8 +483,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   const ensurePeer = () => {
     if (pc) return pc;
-    dbg('webrtc:peer', 'creating RTCPeerConnection', { stun: STUN_URL });
-    pc = new RTCPeerConnection({ iceServers: [{ urls: STUN_URL }] });
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    dbg('webrtc:peer', 'creating RTCPeerConnection', { iceServers: ICE_SERVERS });
     startStatsLoop();
 
     pc.onicecandidate = (e) => {
@@ -537,6 +545,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const startCamera = async () => {
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      throw new Error('Camera requires HTTPS or localhost');
+    }
     dbg('media:getUserMedia', 'requesting local camera/mic');
     localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
@@ -564,7 +575,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     const remoteTypes = new Set(remoteCandidates.map((c) => c?.type).filter(Boolean));
     if (!localCandidates.length || !remoteCandidates.length) return 'No viable ICE candidates yet; check STUN reachability and firewall UDP rules.';
     if (localTypes.has('relay') || remoteTypes.has('relay')) return 'Relay candidate seen but STUN-only mode is active; peer NAT may be too strict for direct P2P.';
-    if (!localTypes.has('srflx') || !remoteTypes.has('srflx')) return 'Missing server-reflexive candidates; one peer may be behind restrictive NAT.';
+    if (!localTypes.has('srflx') || !remoteTypes.has('srflx')) return 'Missing server-reflexive candidates; STUN may be blocked or unreachable. Try another STUN server or add TURN via FIPS_VIDEO_ICE_SERVERS.';
     return 'Direct path negotiation failed; likely incompatible NAT pair for STUN-only mode.';
   };
 
@@ -638,8 +649,11 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         await startCamera();
         autoEnableMediaForJoin();
       } catch (err) {
-        dErr('media:getUserMedia', 'permission denied, continuing receive-only', err);
-        setState('connecting', 'Joined receive-only (camera/mic permission denied)');
+        dErr('media:getUserMedia', 'camera/mic unavailable, continuing receive-only', err);
+        const secureHint = (!window.isSecureContext || location.protocol !== 'https:')
+          ? ' (requires HTTPS or localhost)'
+          : '';
+        setState('connecting', 'Joined receive-only (camera/mic unavailable)' + secureHint);
       }
     } else {
       autoEnableMediaForJoin();
@@ -731,6 +745,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const startQrScan = async () => {
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      throw new Error('QR scan requires HTTPS or localhost');
+    }
     scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
     scanVideo.srcObject = scanStream;
     scanWrap.style.display = 'block';
@@ -921,7 +938,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
   document.getElementById('scan').onclick = () => {
     if (scanStream) stopQrScan();
-    else startQrScan().catch((err) => { dErr('qr:scan', 'failed to start scanner', err); setState('failed', 'QR scan failed'); });
+    else startQrScan().catch((err) => { dErr('qr:scan', 'failed to start scanner', err); setState('failed', 'QR scan failed: ' + err.message); });
   };
 
   document.getElementById('request').onclick = sendRequest;
@@ -968,10 +985,18 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
 </body>
 </html>`;
 
+const html = rawHtml.replace(/<script type="module">[\s\S]*<\/script>/, '<script type="module" src="/app.js"></script>');
+const appJs = rawHtml.split('<script type="module">')[1].split('</script>')[0].replace(/^\n/, '').replace(/\n$/, '');
+
 const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(html);
+    return;
+  }
+  if (req.url === '/app.js') {
+    res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8' });
+    res.end(appJs);
     return;
   }
   res.writeHead(404);

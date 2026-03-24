@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fips-nostr-bootstrap.local/schemas/rendezvous-wire-schema.json",
+  "title": "FIPS Rendezvous NIP-17 Wire Schema",
+  "description": "Encrypted NIP-17 DM payloads used for STUN+FIPS rendezvous signaling.",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/serverInfo" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "wireMeta": {
+      "type": "object",
+      "required": ["version", "sessionId", "nonce", "issuedAt"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "nonce": { "type": "string", "minLength": 1 },
+        "issuedAt": { "type": "number" }
+      }
+    },
+    "hello": {
+      "allOf": [
+        { "$ref": "#/$defs/wireMeta" },
+        {
+          "type": "object",
+          "required": ["type", "wants"],
+          "properties": {
+            "type": { "const": "fips.rendezvous.hello" },
+            "clientEndpoint": {
+              "type": "object",
+              "required": ["host", "port"],
+              "properties": {
+                "host": { "type": "string" },
+                "port": { "type": "number" }
+              }
+            },
+            "wants": {
+              "type": "object",
+              "required": ["stunInfo", "fipsConnect"],
+              "properties": {
+                "stunInfo": { "type": "boolean" },
+                "fipsConnect": { "type": "boolean" }
+              }
+            },
+            "capabilities": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      ]
+    },
+    "serverInfo": {
+      "allOf": [
+        { "$ref": "#/$defs/wireMeta" },
+        {
+          "type": "object",
+          "required": ["type", "endpoint"],
+          "properties": {
+            "type": { "const": "fips.rendezvous.server-info" },
+            "endpoint": {
+              "type": "object",
+              "required": ["host", "port"],
+              "properties": {
+                "host": { "type": "string" },
+                "port": { "type": "number" }
+              }
+            },
+            "punch": {
+              "type": "object",
+              "required": ["startAtMs", "intervalMs", "durationMs"],
+              "properties": {
+                "startAtMs": { "type": "number" },
+                "intervalMs": { "type": "number" },
+                "durationMs": { "type": "number" }
+              }
+            },
+            "stun": {
+              "type": "object",
+              "required": ["uri"],
+              "properties": {
+                "uri": { "type": "string" },
+                "metadataTag": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "error": {
+      "allOf": [
+        { "$ref": "#/$defs/wireMeta" },
+        {
+          "type": "object",
+          "required": ["type", "code", "message"],
+          "properties": {
+            "type": { "const": "fips.rendezvous.error" },
+            "code": {
+              "enum": ["bad-request", "untrusted-peer", "unsupported-version", "internal-error"]
+            },
+            "message": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

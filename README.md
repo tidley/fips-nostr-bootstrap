@@ -218,8 +218,9 @@ Relay config notes (client-side):
 - Or set `window.FIPS_VIDEO_RELAYS = ['wss://relay1', 'wss://relay2']` before app init.
 
 ICE notes:
-- Static page uses STUN-only defaults (no TURN).
+- Static page uses multiple STUN fallbacks by default and stays TURN-free unless you supply one.
 - You can override with `window.FIPS_VIDEO_ICE_SERVERS = [{ urls:'stun:...' }]`.
+- To improve success behind restrictive NATs, provide a TURN-capable ICE server list via `window.FIPS_VIDEO_ICE_SERVERS`.
 
 QR notes:
 - QR image is generated client-side.
@@ -229,8 +230,8 @@ QR notes:
 Notes:
 - Video signaling now uses DM-like kind `1059` events over relays (no local ws signaling path).
 - Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) and `#t` tags for relay-side PoC inspection/classification.
-- Uses WebRTC STUN-only media traversal with env-configurable STUN endpoint (default: `stun:45.77.228.152:3478`).
-- Set `FIPS_STUN_URL=stun:<host>:<port>` to use your self-hosted STUN service.
+- Uses WebRTC ICE traversal with env-configurable STUN/ICE servers (default list includes `stun:45.77.228.152:3478` plus public STUN fallbacks).
+- Set `FIPS_STUN_URL=stun:<host>:<port>` to change the primary STUN endpoint, or `FIPS_VIDEO_ICE_SERVERS` in the browser to supply a full ICE server list.
 - Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
 - Join flow now auto-acquires local media when possible before sending offer/answer.
 - If media permission is denied, UI explicitly reports joined receive-only mode.
@@ -313,6 +314,25 @@ Security notes:
 - Run with low-privilege user in testing.
 
 ---
+
+## Daemon entrypoint (role-based)
+
+Use the unified daemon to start services by runtime role:
+
+```bash
+npm run daemon -- --role fips --fips-udp-port 9999 --relays wss://nos.lol
+npm run daemon -- --role relay --relays wss://nos.lol,wss://relay.damus.io
+npm run daemon -- --role stun --stun-port 3478
+npm run daemon -- --role all --fips-udp-port 9999 --relays wss://nos.lol --stun-port 3478
+```
+
+Notes:
+- `fips`/`relay` currently share the rendezvous node implementation (`packages/fips-nostr-rendezvous`).
+- `stun` role supervises `tools/stun-lite` via `go run main.go` by default.
+- Port preflight checks are enabled by default (UDP bind checks for required role ports).
+- Disable preflight checks only when needed: `--no-check-ports`.
+- On port check failures, daemon prints troubleshooting commands (`ss`, `lsof`, `ufw`, `nft`).
+- Override STUN process command with `--stun-cmd`, `--stun-args`, `--stun-cwd` (or `STUN_CMD`, `STUN_ARGS`, `STUN_CWD`).
 
 ## Dev
 

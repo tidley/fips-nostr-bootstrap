@@ -1,12 +1,12 @@
 # STATUS
 
-Phase: STUN-only media path stabilized; preparing FIPS integration bridge
+Phase: Documentation + test hardening for FIPS/STUN/NIP-17 merge readiness
 
-Objective: Keep NIP-17 DM bootstrap + STUN-only call path reliable, then define/implement a clean handoff into `jmcorgan/fips` as the post-bootstrap data plane.
+Objective: Build a merge-ready baseline that treats `jmcorgan/fips` as the transport reference, with NIP-17 signaling and STUN as integration adapters.
 
 Current snapshot:
-- Signaling classification is working (`is_call_signal=true` with matched tags).
-- STUN-only connectivity is working with standalone Vultr STUN endpoint.
-- ICE candidate ordering bug fixed (queue until remoteDescription).
-- Join flow improved (auto media acquire + explicit receive-only fallback).
-- Remaining issue area: intermittent “connected but no media” debugging and state-machine hardening.
+- Added architecture/protocol/security/operations docs for combined FIPS + STUN + relay model.
+- Added parity matrix governance doc (`docs/FIPS-PARITY.md`).
+- Added bridge contract tests in TS (`src/bridge_contract.test.ts`).
+- Added STUN/NAT policy tests in TS (`src/stun_lite.test.ts`).
+- Added Go tests for `tools/stun-lite` and extracted testable packet handling helper.

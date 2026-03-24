@@ -20,3 +20,17 @@
 - Confirmed STUN-only P2P path with srflx candidates and connected ICE state.
 - Identified remaining intermittent media-flow issue as app-state/track-level, not bootstrap transport.
 - Began planning for `jmcorgan/fips` integration as post-bootstrap data plane.
+
+## 2026-03-23
+- Added director-level architecture docs for merged FIPS + Nostr relay + STUN stack:
+  - `docs/ARCHITECTURE.md`
+  - `docs/FIPS-PARITY.md`
+  - `docs/PROTOCOLS.md`
+  - `docs/OPERATIONS.md`
+  - `docs/SECURITY.md`
+- Added TS tests to enforce bridge message contract and STUN/NAT policy behavior:
+  - `src/bridge_contract.test.ts`
+  - `src/stun_lite.test.ts`
+- Refactored `tools/stun-lite/main.go` to expose testable packet handling helper.
+- Added Go unit tests for stun-lite request handling and env fallback:
+  - `tools/stun-lite/main_test.go`
