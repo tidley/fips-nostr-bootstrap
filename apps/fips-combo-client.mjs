@@ -205,28 +205,64 @@ if (mode === 'connect') {
   const sessionNonce = info.nonce;
   let seq = 0;
   let acked = false;
+  let fipsPong = null;
 
   const connected = await new Promise((resolve) => {
     socket.on('message', (msg) => {
       try {
-        const pkt = JSON.parse(msg.toString('utf8'));
+        const raw = msg.toString('utf8');
+
+        // Probe acknowledgement path.
+        const pkt = JSON.parse(raw);
         if (pkt?.t === 'PROBE_ACK' && pkt?.n === sessionNonce) {
           acked = true;
+          return;
+        }
+
+        // fallthrough for framed FIPS traffic if JSON packet isn't PROBE_ACK
+      } catch {
+        // not plain JSON packet, may be framed FIPS payload
+      }
+
+      try {
+        if (msg.length < 5) return;
+        if (msg.subarray(0, 5).toString() !== 'FIPS1') return;
+        const frame = JSON.parse(msg.subarray(5).toString('utf8'));
+        if (frame?.sessionId !== sessionNonce) return;
+        if (frame?.channel === 'fips_pong') {
+          fipsPong = frame.payload;
           resolve(true);
         }
       } catch {
-        // ignore
+        // ignore malformed frame
       }
     });
 
     setTimeout(async () => {
       const startedAt = Date.now();
-      while (Date.now() - startedAt < durationMs && !acked) {
-        const probe = Buffer.from(JSON.stringify({ t: 'PROBE', n: sessionNonce, s: seq++ }));
-        socket.send(probe, endpoint.port, endpoint.host);
+      let sentFipsPing = false;
+
+      while (Date.now() - startedAt < durationMs && !fipsPong) {
+        if (!acked) {
+          const probe = Buffer.from(JSON.stringify({ t: 'PROBE', n: sessionNonce, s: seq++ }));
+          socket.send(probe, endpoint.port, endpoint.host);
+        } else if (!sentFipsPing) {
+          const frame = {
+            sessionId: sessionNonce,
+            type: 'data',
+            channel: 'fips_ping',
+            payload: { clientNpub: npub, at: Date.now(), msg: 'hello-from-combo-client' },
+            at: Date.now(),
+          };
+          const pkt = Buffer.concat([Buffer.from('FIPS1'), Buffer.from(JSON.stringify(frame))]);
+          socket.send(pkt, endpoint.port, endpoint.host);
+          sentFipsPing = true;
+        }
+
         await sleep(intervalMs);
       }
-      resolve(acked);
+
+      resolve(Boolean(fipsPong));
     }, waitMs);
   });
 
@@ -237,10 +273,12 @@ if (mode === 'connect') {
       attempted: true,
       endpoint,
       punch: { startAtMs, intervalMs, durationMs },
-      probeAckReceived: connected,
+      probeAckReceived: acked,
+      fipsTrafficRoundtrip: Boolean(fipsPong),
+      fipsPong,
       note: connected
-        ? 'UDP punch probe acknowledged; continue with FIPS session establishment next.'
-        : 'No PROBE_ACK observed within punch window.',
+        ? 'UDP punch acknowledged and FIPS framed traffic roundtrip succeeded.'
+        : 'No FIPS framed response observed within punch window.',
     },
   }, null, 2));
 

@@ -190,6 +190,18 @@ if (relayNodeRequired) {
   });
 
   const started = await rendezvousNode.start();
+
+  // Minimal built-in FIPS traffic handler for connectivity validation.
+  rendezvousNode.on('session', ({ sessionId, remote, session }) => {
+    console.log('[fips-daemon] fips session established', JSON.stringify({ sessionId, remote }));
+
+    session.send('fips_status', { sessionId, status: 'ready', at: Date.now() }, 'status');
+
+    session.on('channel:fips_ping', (payload) => {
+      session.send('fips_pong', { sessionId, received: payload, at: Date.now() }, 'data');
+    });
+  });
+
   console.log(
     JSON.stringify(
       {
