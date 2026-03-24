@@ -156,7 +156,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
     this.sub = this.pool.subscribeMany(
       this.relays,
-      { kinds: [1059], '#p': [this.pubkey], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
+      { kinds: [1059], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
       {
         onevent: async (evt) => {
           try {
@@ -264,7 +264,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       let timer;
       const sub = this.pool.subscribeMany(
         this.relays,
-        { kinds: [1059], '#p': [this.pubkey], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
+        { kinds: [1059], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
         {
           onevent: async (evt) => {
             try {
