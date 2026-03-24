@@ -389,6 +389,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const startCamera = async () => {
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      throw new Error('Camera requires HTTPS or localhost');
+    }
     localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -498,9 +501,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
         autoEnableMediaForJoin();
       } catch (e) {
         const secureHint = (!window.isSecureContext || location.protocol !== 'https:')
-          ? ' (requires HTTPS/secure context)'
+          ? ' (requires HTTPS or localhost)'
           : '';
-        setState('connecting', 'Joined receive-only (camera/mic permission denied)' + secureHint);
+        setState('connecting', 'Joined receive-only (camera/mic unavailable)' + secureHint);
       }
     } else {
       autoEnableMediaForJoin();
@@ -606,6 +609,9 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   const startQrScan = async () => {
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      throw new Error('QR scan requires HTTPS or localhost');
+    }
     scanStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
     scanVideo.srcObject = scanStream;
     scanWrap.style.display = 'block';
@@ -790,7 +796,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   };
 
   document.getElementById('scan').onclick = () => {
-    if (scanStream) stopQrScan(); else startQrScan().catch(() => setState('failed', 'QR scan failed'));
+    if (scanStream) stopQrScan(); else startQrScan().catch((err) => setState('failed', 'QR scan failed: ' + err.message));
   };
 
   document.getElementById('request').onclick = sendRequest;
