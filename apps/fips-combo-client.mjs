@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import 'dotenv/config';
-import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
-import { useWebSocketImplementation } from 'nostr-tools/relay';
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
+import WS from 'ws';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -63,6 +63,7 @@ const serverPubkey = target.data;
 
 const nsecInput = arg('--nsec', process.env.FIPS_CLIENT_NSEC || '');
 let sk;
+let resolvedNsec;
 if (nsecInput) {
   const d = nip19.decode(nsecInput);
   if (d.type !== 'nsec') {
@@ -70,8 +71,10 @@ if (nsecInput) {
     process.exit(1);
   }
   sk = d.data;
+  resolvedNsec = nsecInput;
 } else {
   sk = generateSecretKey();
+  resolvedNsec = nip19.nsecEncode(sk);
 }
 
 const pubkey = getPublicKey(sk);
@@ -91,15 +94,10 @@ const helloPayload = {
   clientEndpoint: { host: '0.0.0.0', port: 9 },
 };
 
-const wsMod = await import('ws');
-useWebSocketImplementation(wsMod.WebSocket || wsMod.default);
-
-const pool = new SimplePool();
-
 console.log(JSON.stringify({
   app: 'fips-combo-client',
   relay,
-  client: { npub, ephemeral: !nsecInput },
+  client: { npub, ephemeral: !nsecInput, nsec: resolvedNsec },
   target: { npub: serverNpub },
   request: helloPayload,
 }, null, 2));
@@ -107,39 +105,54 @@ console.log(JSON.stringify({
 const event = wrapEvent(sk, { publicKey: serverPubkey }, JSON.stringify(helloPayload));
 
 const result = await new Promise((resolve, reject) => {
-  const timeout = setTimeout(() => reject(new Error('timed out waiting for server-info')), timeoutMs);
+  const ws = new WS(relay);
+  const subId = `combo-sub-${Math.random().toString(16).slice(2)}`;
 
-  const sub = pool.subscribeMany(
-    [relay],
-    { kinds: [1059], since: Math.floor(Date.now() / 1000) - 120 },
-    {
-      onevent: (evt) => {
-        try {
-          const rumor = unwrapEvent(evt, sk);
-          const msg = JSON.parse(rumor.content);
-          if (msg?.type !== 'fips.rendezvous.server-info') return;
-          if (msg?.nonce !== nonce || msg?.sessionId !== sessionId) return;
+  const timeout = setTimeout(() => {
+    try { ws.close(); } catch {}
+    reject(new Error('timed out waiting for server-info'));
+  }, timeoutMs);
 
+  ws.on('open', () => {
+    ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], since: Math.floor(Date.now() / 1000) - 120 }]));
+    ws.send(JSON.stringify(['EVENT', event]));
+  });
+
+  ws.on('message', (raw) => {
+    try {
+      const arr = JSON.parse(String(raw));
+      if (!Array.isArray(arr) || arr.length < 2) return;
+
+      if (arr[0] === 'OK') {
+        const ok = Boolean(arr[2]);
+        if (!ok) {
           clearTimeout(timeout);
-          sub.close();
-          resolve({ rumor, msg });
-        } catch {
-          // ignore unrelated/unreadable events
+          try { ws.close(); } catch {}
+          reject(new Error(`relay rejected event: ${arr[3] || 'unknown'}`));
         }
-      },
-    },
-  );
+        return;
+      }
 
-  Promise.allSettled(pool.publish([relay], event)).then((outcomes) => {
-    const ok = outcomes.some((r) => r.status === 'fulfilled');
-    if (!ok) {
+      if (arr[0] !== 'EVENT') return;
+      const evt = arr[2];
+      if (!evt) return;
+
+      const rumor = unwrapEvent(evt, sk);
+      const msg = JSON.parse(rumor.content);
+      if (msg?.type !== 'fips.rendezvous.server-info') return;
+      if (msg?.nonce !== nonce || msg?.sessionId !== sessionId) return;
+
       clearTimeout(timeout);
-      sub.close();
-      reject(new Error('failed to publish hello to relay'));
+      try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {}
+      try { ws.close(); } catch {}
+      resolve({ rumor, msg });
+    } catch {
+      // ignore unrelated/unreadable events
     }
-  }).catch((err) => {
+  });
+
+  ws.on('error', (err) => {
     clearTimeout(timeout);
-    sub.close();
     reject(err);
   });
 });
@@ -148,5 +161,3 @@ console.log(JSON.stringify({
   ok: true,
   response: result.msg,
 }, null, 2));
-
-pool.close([relay]);
