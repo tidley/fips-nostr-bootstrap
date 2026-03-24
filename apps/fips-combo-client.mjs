@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import WS from 'ws';
+import dgram from 'node:dgram';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -11,6 +12,10 @@ function arg(name, fallback = '') {
 
 function hasFlag(name) {
   return process.argv.includes(name);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function usage() {
@@ -25,6 +30,7 @@ Options:
   --server-npub <npub>     Target server npub (required)
   --session-id <id>        Optional session id override
   --timeout-ms <ms>        Wait timeout (default: 30000)
+  --mode <bootstrap|connect>  Run bootstrap only or continue into UDP punch connect (default: bootstrap)
   --nsec <nsec>            Optional client nsec (default: ephemeral)
   --want-fips <0|1>        Include fips connect request (default: 1)
   --want-stun <0|1>        Include stun info request (default: 1)
@@ -45,8 +51,14 @@ if (hasFlag('--help') || hasFlag('-h')) {
 const relay = arg('--relay', process.env.FIPS_CLIENT_RELAY || 'wss://fips.tomdwyer.uk');
 const serverNpub = arg('--server-npub', process.env.FIPS_SERVER_NPUB || '');
 const timeoutMs = Number(arg('--timeout-ms', '30000'));
+const mode = arg('--mode', 'bootstrap');
 const wantFips = arg('--want-fips', '1') !== '0';
 const wantStun = arg('--want-stun', '1') !== '0';
+
+if (!['bootstrap', 'connect'].includes(mode)) {
+  console.error('[combo-client] --mode must be bootstrap or connect');
+  process.exit(1);
+}
 
 if (!serverNpub) {
   console.error('[combo-client] missing --server-npub (or FIPS_SERVER_NPUB)');
@@ -83,20 +95,32 @@ const npub = nip19.npubEncode(pubkey);
 const sessionId = arg('--session-id', `combo-${Date.now()}`);
 const nonce = `n-${Math.random().toString(16).slice(2)}`;
 
+let connectSocket = null;
+let localUdpPort = 9;
+if (mode === 'connect') {
+  connectSocket = dgram.createSocket('udp4');
+  await new Promise((resolve, reject) => {
+    connectSocket.once('error', reject);
+    connectSocket.bind(0, '0.0.0.0', resolve);
+  });
+  localUdpPort = connectSocket.address().port;
+}
+
 const helloPayload = {
   type: 'fips.rendezvous.hello',
   version: '1.0',
   sessionId,
   nonce,
   issuedAt: Date.now(),
-  wants: { stunInfo: wantStun, fipsConnect: wantFips },
+  wants: { stunInfo: wantStun, fipsConnect: wantFips || mode === 'connect' },
   capabilities: ['combo-client-v1'],
-  clientEndpoint: { host: '0.0.0.0', port: 9 },
+  clientEndpoint: { host: '0.0.0.0', port: localUdpPort },
 };
 
 console.log(JSON.stringify({
   app: 'fips-combo-client',
   relay,
+  mode,
   client: { npub, ephemeral: !nsecInput, nsec: resolvedNsec },
   target: { npub: serverNpub },
   request: helloPayload,
@@ -161,3 +185,64 @@ console.log(JSON.stringify({
   ok: true,
   response: result.msg,
 }, null, 2));
+
+if (mode === 'connect') {
+  const info = result.msg;
+  const endpoint = info?.endpoint;
+  const punch = info?.punch;
+
+  if (!endpoint?.host || !endpoint?.port || !punch) {
+    console.error('[combo-client] connect mode requires endpoint + punch in server-info');
+    process.exit(2);
+  }
+
+  const socket = connectSocket || dgram.createSocket('udp4');
+  const intervalMs = Number(punch.intervalMs || 300);
+  const durationMs = Number(punch.durationMs || 30000);
+  const startAtMs = Number(punch.startAtMs || Date.now());
+  const waitMs = Math.max(0, startAtMs - Date.now());
+
+  const sessionNonce = info.nonce;
+  let seq = 0;
+  let acked = false;
+
+  const connected = await new Promise((resolve) => {
+    socket.on('message', (msg) => {
+      try {
+        const pkt = JSON.parse(msg.toString('utf8'));
+        if (pkt?.t === 'PROBE_ACK' && pkt?.n === sessionNonce) {
+          acked = true;
+          resolve(true);
+        }
+      } catch {
+        // ignore
+      }
+    });
+
+    setTimeout(async () => {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < durationMs && !acked) {
+        const probe = Buffer.from(JSON.stringify({ t: 'PROBE', n: sessionNonce, s: seq++ }));
+        socket.send(probe, endpoint.port, endpoint.host);
+        await sleep(intervalMs);
+      }
+      resolve(acked);
+    }, waitMs);
+  });
+
+  socket.close();
+
+  console.log(JSON.stringify({
+    connect: {
+      attempted: true,
+      endpoint,
+      punch: { startAtMs, intervalMs, durationMs },
+      probeAckReceived: connected,
+      note: connected
+        ? 'UDP punch probe acknowledged; continue with FIPS session establishment next.'
+        : 'No PROBE_ACK observed within punch window.',
+    },
+  }, null, 2));
+
+  if (!connected) process.exit(3);
+}
