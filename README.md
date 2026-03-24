@@ -314,6 +314,22 @@ Security notes:
 
 ---
 
+## Daemon entrypoint (role-based)
+
+Use the unified daemon to start services by runtime role:
+
+```bash
+npm run daemon -- --role fips --fips-udp-port 9999 --relays wss://nos.lol
+npm run daemon -- --role relay --relays wss://nos.lol,wss://relay.damus.io
+npm run daemon -- --role stun --stun-port 3478
+npm run daemon -- --role all --fips-udp-port 9999 --relays wss://nos.lol --stun-port 3478
+```
+
+Notes:
+- `fips`/`relay` currently share the rendezvous node implementation (`packages/fips-nostr-rendezvous`).
+- `stun` role supervises `tools/stun-lite` via `go run main.go` by default.
+- Override STUN process command with `--stun-cmd`, `--stun-args`, `--stun-cwd` (or `STUN_CMD`, `STUN_ARGS`, `STUN_CWD`).
+
 ## Dev
 
 ```bash
