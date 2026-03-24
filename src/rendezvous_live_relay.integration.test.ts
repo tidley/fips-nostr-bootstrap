@@ -106,7 +106,7 @@ describeLive('live rendezvous relay integration (real relay)', () => {
       sessionId,
       nonce,
       issuedAt: Date.now(),
-      wants: { stunInfo: true, fipsConnect: true },
+      wants: { stunInfo: true, fipsConnect: false },
       capabilities: ['live-server-roundtrip-test'],
       clientEndpoint: { host: '0.0.0.0', port: 9 },
     };

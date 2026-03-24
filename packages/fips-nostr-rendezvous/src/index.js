@@ -181,7 +181,30 @@ export class FipsNostrRendezvousNode extends EventEmitter {
                 ...(wants.fipsConnect ? { punch } : {}),
               };
 
+              console.log(
+                '[rendezvous] hello received',
+                JSON.stringify({
+                  fromNpub,
+                  nonce: msg.nonce,
+                  sessionId: msg.sessionId || msg.nonce,
+                  wants,
+                  hasClientEndpoint: Boolean(msg?.clientEndpoint?.host && msg?.clientEndpoint?.port),
+                }),
+              );
+
               publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: rumor.pubkey, obj: reply });
+
+              console.log(
+                '[rendezvous] server-info published',
+                JSON.stringify({
+                  toPubkey: rumor.pubkey,
+                  nonce: reply.nonce,
+                  sessionId: reply.sessionId,
+                  endpoint: reply.endpoint,
+                  hasStun: Boolean(reply.stun),
+                  hasPunch: Boolean(reply.punch),
+                }),
+              );
 
               if (wants.fipsConnect && msg?.clientEndpoint?.host && msg?.clientEndpoint?.port) {
                 this._startPunch(msg.nonce, msg.clientEndpoint, punch);
