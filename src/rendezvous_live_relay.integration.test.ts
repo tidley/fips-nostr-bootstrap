@@ -4,9 +4,8 @@ import { useWebSocketImplementation } from 'nostr-tools/relay';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import { isHelloMessage, isServerInfoMessage } from './rendezvous_nip17.js';
 
-const runLive = process.env.RUN_LIVE_RELAY_TESTS === '1';
-const runLiveServer = process.env.RUN_LIVE_SERVER_ROUNDTRIP === '1';
-const describeLive = runLive ? describe : describe.skip;
+const runLiveServer = process.env.RUN_LIVE_SERVER_ROUNDTRIP !== '0';
+const describeLive = describe;
 
 const RELAYS = (process.env.FIPS_TEST_RELAYS || 'wss://nos.lol,wss://nip17.tomdwyer.uk')
   .split(',')
@@ -87,7 +86,7 @@ describeLive('live rendezvous relay integration (real relay)', () => {
   }, 25000);
 
   const itServer = runLiveServer ? it : it.skip;
-  itServer('optionally roundtrips against live server npub and receives server-info', async () => {
+  itServer('roundtrips against live server npub and receives server-info', async () => {
     const wsMod = await import('ws');
     // @ts-ignore
     useWebSocketImplementation(wsMod.WebSocket || wsMod.default);
@@ -115,11 +114,11 @@ describeLive('live rendezvous relay integration (real relay)', () => {
     const event = wrapEvent(clientSk, { publicKey: serverPubkey }, JSON.stringify(helloPayload));
 
     const gotServerInfo = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('timed out waiting for server-info')), 15000);
+      const timeout = setTimeout(() => reject(new Error('timed out waiting for server-info')), 30000);
 
       const sub = pool.subscribeMany(
         RELAYS,
-        { kinds: [1059], '#p': [clientPubkey], since: Math.floor(Date.now() / 1000) - 60 },
+        { kinds: [1059], '#p': [clientPubkey], since: Math.floor(Date.now() / 1000) - 120 },
         {
           onevent: (evt) => {
             try {
@@ -142,7 +141,12 @@ describeLive('live rendezvous relay integration (real relay)', () => {
       );
     });
 
-    await Promise.allSettled(pool.publish(RELAYS, event));
+    // publish with retries to tolerate transient relay timing
+    for (let i = 0; i < 3; i += 1) {
+      await Promise.allSettled(pool.publish(RELAYS, event));
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
     await gotServerInfo;
-  }, 25000);
+  }, 40000);
 });
