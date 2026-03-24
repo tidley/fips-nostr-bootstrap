@@ -165,6 +165,8 @@ if (relayNodeRequired) {
     trustedNpubs,
     nsec: process.env.NOSTR_NSEC,
     publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
+    stunPort: config.stunPort,
+    stunUri: process.env.FIPS_STUN_URI,
   });
 
   const started = await rendezvousNode.start();
