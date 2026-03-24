@@ -12,3 +12,4 @@ export * from './test_harness.js';
 export * from './demoEngine.js';
 export * from './rendezvous_nip17.js';
 export * from './runtime_roles.js';
+export * from './embedded_relay.js';

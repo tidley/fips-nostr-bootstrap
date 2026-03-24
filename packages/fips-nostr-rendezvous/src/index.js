@@ -38,9 +38,21 @@ function parsePacket(buf) {
   }
 }
 
-function publishDM({ pool, relays, sk, recipientPubkey, obj }) {
+function publishDM({ pool, relays, sk, recipientPubkey, obj, logContext }) {
   const event = wrapEvent(sk, { publicKey: recipientPubkey }, JSON.stringify(obj));
-  Promise.allSettled(pool.publish(relays, event)).catch(() => undefined);
+  Promise.allSettled(pool.publish(relays, event))
+    .then((results) => {
+      if (!logContext) return;
+      const summary = results.map((r, i) => ({
+        relay: relays[i] || `relay-${i}`,
+        status: r.status,
+        reason: r.status === 'rejected' ? String(r.reason) : undefined,
+      }));
+      console.log('[rendezvous] publish outcomes', JSON.stringify({ logContext, summary }));
+    })
+    .catch((err) => {
+      console.error('[rendezvous] publish failure', String(err));
+    });
 }
 
 class FipsStackSession extends EventEmitter {
@@ -270,7 +282,14 @@ export class FipsNostrRendezvousNode extends EventEmitter {
         },
       );
 
-      publishDM({ pool: this.pool, relays: this.relays, sk: this.sk, recipientPubkey: targetPubkey, obj: hello });
+      publishDM({
+        pool: this.pool,
+        relays: this.relays,
+        sk: this.sk,
+        recipientPubkey: targetPubkey,
+        obj: hello,
+        logContext: { kind: 'hello', nonce: helloNonce, sessionId: hello.sessionId, toPubkey: targetPubkey },
+      });
 
       timer = setInterval(() => {
         if (Date.now() - started > waitMs) {
@@ -336,15 +355,6 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.sub?.close();
     this.pool?.close(this.relays);
     for (const s of this.sessions.values()) s.close();
-    this.sessions.clear();
-    this.socket.close();
-  }
-}
-
-export function createFipsNostrRendezvousNode(options) {
-  return new FipsNostrRendezvousNode(options);
-}
-  for (const s of this.sessions.values()) s.close();
     this.sessions.clear();
     this.socket.close();
   }

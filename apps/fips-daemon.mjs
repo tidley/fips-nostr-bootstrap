@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 import { parseRuntimeRole, startupPlanForRole } from '../dist/runtime_roles.js';
+import { startEmbeddedRelay } from '../dist/embedded_relay.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -81,7 +82,14 @@ async function checkUdpPortAvailable(port, roleLabel) {
 }
 
 const role = parseRuntimeRole(arg('--role', process.env.FIPS_RUNTIME_ROLE || 'all'));
-const relayUrls = splitList(arg('--relays', process.env.NOSTR_RELAYS || ''));
+const relayListenHost = arg('--relay-listen-host', process.env.FIPS_RELAY_LISTEN_HOST || '127.0.0.1');
+const relayListenPort = asPort(arg('--relay-listen-port', process.env.FIPS_RELAY_LISTEN_PORT || '1717')) || 1717;
+const embeddedRelayEnabled = !hasFlag('--no-embedded-relay');
+let relayUrls = splitList(arg('--relays', process.env.NOSTR_RELAYS || ''));
+if (embeddedRelayEnabled && relayUrls.length === 0) {
+  relayUrls = [`ws://${relayListenHost}:${relayListenPort}`];
+}
+
 const trustedNpubs = splitList(arg('--trusted-npubs', process.env.FIPS_TRUSTED_NPUBS || ''));
 const checkPorts = !hasFlag('--no-check-ports');
 
@@ -103,6 +111,7 @@ try {
 
 const relayNodeRequired = plan.fips || plan.relay;
 let rendezvousNode = null;
+let embeddedRelay = null;
 let stunProc = null;
 
 if (checkPorts) {
@@ -155,7 +164,18 @@ if (checkPorts) {
 }
 
 if (relayNodeRequired) {
-  // Current rendezvous package contains both signaling + UDP punch endpoint.
+  if (embeddedRelayEnabled) {
+    embeddedRelay = await startEmbeddedRelay({
+      host: relayListenHost,
+      port: relayListenPort,
+      log: (msg, meta) => console.log(`[fips-daemon] ${msg}`, JSON.stringify(meta || {})),
+    });
+
+    // Prefer embedded relay as first target for deterministic local signaling.
+    if (!relayUrls.includes(embeddedRelay.url)) relayUrls = [embeddedRelay.url, ...relayUrls];
+  }
+
+  // Current rendezvous package contains signaling + UDP punch endpoint.
   // For relay-only mode, we bind an ephemeral UDP port unless explicitly configured.
   const udpPort = plan.fips ? config.fipsUdpPort : (config.fipsUdpPort || 0);
 
@@ -183,11 +203,18 @@ if (relayNodeRequired) {
           relay: plan.relay,
           stun: plan.stun,
         },
+        relayServer: {
+          embedded: Boolean(embeddedRelay),
+          url: embeddedRelay?.url,
+          listenHost: embeddedRelay ? relayListenHost : undefined,
+          listenPort: embeddedRelay?.port,
+        },
         rendezvous: {
           enabled: true,
           npub: started.npub,
           udpPort: started.udpPort,
           relayCount: relayUrls.length,
+          relays: relayUrls,
           trustedCount: trustedNpubs.length,
         },
       },
@@ -225,6 +252,10 @@ async function shutdown(signal) {
   console.log(`[fips-daemon] received ${signal}, shutting down`);
   try {
     rendezvousNode?.close();
+  } catch {}
+
+  try {
+    await embeddedRelay?.close();
   } catch {}
 
   if (stunProc && !stunProc.killed) {
