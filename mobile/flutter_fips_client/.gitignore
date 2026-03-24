@@ -1,0 +1,29 @@
+# Flutter
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+.metadata
+.dart_tool/
+build/
+flutter_assets/
+ios/
+android/
+linux/
+windows/
+macos/
+web/
+# Rust
+rust/target/
+rust/Cargo.lock
+# FRB generated builder
+rust_builder/
+integration_test/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.iml
+# OS
+.DS_Store
+Thumbs.db
