@@ -17,6 +17,7 @@ type RelayFilter = {
 
 type Subscription = {
   ws: import('ws').WebSocket;
+  connId: string;
   subId: string;
   filters: RelayFilter[];
 };
@@ -54,10 +55,12 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
 
   const events: RelayEvent[] = [];
   const subs = new Map<string, Subscription>();
+  let connSeq = 0;
 
   const wss = new WebSocketServer({ host, port });
 
   wss.on('connection', (ws) => {
+    const connId = `c${++connSeq}`;
     ws.on('message', (raw) => {
       let msg: unknown;
       try {
@@ -77,7 +80,8 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
       if (type === 'REQ') {
         const subId = String(msg[1]);
         const filters = msg.slice(2) as RelayFilter[];
-        subs.set(subId, { ws, subId, filters });
+        const key = `${connId}:${subId}`;
+        subs.set(key, { ws, connId, subId, filters });
 
         for (const evt of events) {
           if (matchesAny(evt, filters)) safeSend(ws, ['EVENT', subId, evt]);
@@ -88,7 +92,8 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
 
       if (type === 'CLOSE') {
         const subId = String(msg[1]);
-        subs.delete(subId);
+        const key = `${connId}:${subId}`;
+        subs.delete(key);
         return;
       }
 
@@ -114,7 +119,7 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
 
     ws.on('close', () => {
       for (const [k, sub] of subs.entries()) {
-        if (sub.ws === ws) subs.delete(k);
+        if (sub.connId === connId) subs.delete(k);
       }
     });
   });

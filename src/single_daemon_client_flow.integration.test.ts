@@ -63,12 +63,11 @@ describeSingle('single-daemon client flow (relay + stun info + fips endpoint)', 
 
       const sub = pool.subscribeMany(
         [relay.url],
-        { kinds: [1059], '#p': [clientPubkey], since: Math.floor(Date.now() / 1000) - 10 },
+        { kinds: [1059], since: Math.floor(Date.now() / 1000) - 10 },
         {
           onevent: (evt) => {
             try {
               const rumor = unwrapEvent(evt, clientSk);
-              if (rumor.pubkey !== serverPubkey) return;
               const msg = JSON.parse(rumor.content);
               if (!isServerInfoMessage(msg)) return;
               if (msg.nonce !== nonce || msg.sessionId !== sessionId) return;

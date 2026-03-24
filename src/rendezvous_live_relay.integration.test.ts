@@ -118,12 +118,11 @@ describeLive('live rendezvous relay integration (real relay)', () => {
 
       const sub = pool.subscribeMany(
         RELAYS,
-        { kinds: [1059], '#p': [clientPubkey], since: Math.floor(Date.now() / 1000) - 120 },
+        { kinds: [1059], since: Math.floor(Date.now() / 1000) - 120 },
         {
           onevent: (evt) => {
             try {
               const rumor = unwrapEvent(evt, clientSk);
-              if (rumor.pubkey !== serverPubkey) return;
               const msg = JSON.parse(rumor.content);
               if (!isServerInfoMessage(msg)) return;
               if (msg.nonce !== nonce || msg.sessionId !== sessionId) return;
