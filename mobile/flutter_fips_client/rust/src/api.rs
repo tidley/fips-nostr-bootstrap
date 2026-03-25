@@ -142,23 +142,40 @@ async fn run_echo(relay_url: String, server_npub: String, timeout_ms: i64) -> an
     udp.send_to(&framed, format!("{}:{}", endpoint.host, endpoint.port)).await?;
 
     let mut buf = [0u8; 8192];
-    let (n, _) = timeout(Duration::from_millis(timeout_ms as u64), udp.recv_from(&mut buf)).await??;
-    let payload = &buf[..n];
-    let ok = payload.starts_with(b"FIPS1")
-        && serde_json::from_slice::<serde_json::Value>(&payload[5..])
-            .ok()
-            .and_then(|v| v.get("channel").cloned())
-            == Some(json!("fips_pong"));
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+    let mut ok = false;
+    let mut detail = "timeout waiting for fips_pong".to_string();
+
+    while Instant::now() < deadline {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let recv = timeout(left.min(Duration::from_millis(500)), udp.recv_from(&mut buf)).await;
+        let (n, _) = match recv {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => continue,
+        };
+
+        let payload = &buf[..n];
+        if !payload.starts_with(b"FIPS1") {
+            detail = "received non-FIPS1 packet while waiting for pong".to_string();
+            continue;
+        }
+
+        let parsed = serde_json::from_slice::<serde_json::Value>(&payload[5..]).ok();
+        let ch = parsed.as_ref().and_then(|v| v.get("channel")).and_then(|v| v.as_str());
+        if matches!(ch, Some("fips_pong") | Some("fips_status")) {
+            ok = true;
+            detail = format!("received FIPS1 {}", ch.unwrap_or("unknown"));
+            break;
+        }
+        detail = format!("received FIPS1 frame with unexpected channel: {:?}", ch);
+    }
 
     Ok(EchoResult {
         echo_roundtrip_ok: ok,
         echo_rtt_ms: Some(t0.elapsed().as_millis() as i64),
         endpoint,
-        detail: if ok {
-            "received FIPS1 fips_pong".to_string()
-        } else {
-            "unexpected echo payload".to_string()
-        },
+        detail,
     })
 }
 
@@ -168,6 +185,7 @@ async fn run_bootstrap(
     timeout_ms: i64,
     connect_mode: bool,
 ) -> anyhow::Result<BootstrapResult> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let keys = Keys::generate();
     let server_pubkey = PublicKey::parse(&server_npub).context("invalid server npub")?;
 
