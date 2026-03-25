@@ -8,7 +8,5 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_rust_bridge: any
-dev_dependencies:
-  flutter_rust_bridge_codegen: any
 flutter:
   uses-material-design: true

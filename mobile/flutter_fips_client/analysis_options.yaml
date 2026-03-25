@@ -1,0 +1,4 @@
+analyzer:
+  exclude:
+    - rust_builder/**
+    - integration_test/**
