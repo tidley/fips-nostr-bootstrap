@@ -3,7 +3,11 @@ import 'dotenv/config';
 import { exec } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { createFipsNostrRendezvousNode, DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
+import {
+  createFipsNostrRendezvousNode,
+  DEFAULT_ADVERT_RELAYS,
+  DEFAULT_DM_RELAYS,
+} from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -13,11 +17,15 @@ function arg(name, fallback = '') {
 const udpPort = Number(arg('--udp-port', '9999'));
 const trusted = (arg('--trusted-npubs', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
 const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const effectiveRelays = relays.length ? relays : [...DEFAULT_RELAYS];
+const advertRelays = (arg('--advert-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const dmRelays = (arg('--dm-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveAdvertRelays = relays.length ? [...relays] : (advertRelays.length ? advertRelays : [...DEFAULT_ADVERT_RELAYS]);
+const effectiveDmRelays = relays.length ? [...relays] : (dmRelays.length ? dmRelays : [...DEFAULT_DM_RELAYS]);
 
 const node = createFipsNostrRendezvousNode({
   udpPort,
-  relays: effectiveRelays,
+  advertRelays: effectiveAdvertRelays,
+  dmRelays: effectiveDmRelays,
   trustedNpubs: trusted,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
@@ -147,8 +155,9 @@ console.log(JSON.stringify({
   app: 'fips-shell-server',
   npub: started.npub,
   udpPort: started.udpPort,
-  relays: effectiveRelays,
-  relaySource: relays.length ? 'cli' : 'embedded-defaults',
+  advertRelays: effectiveAdvertRelays,
+  dmRelays: effectiveDmRelays,
+  relaySource: relays.length ? 'cli-shared' : ((advertRelays.length || dmRelays.length) ? 'cli-split' : 'embedded-defaults'),
   trustedCount: trusted.length,
 }, null, 2));
 

@@ -8,11 +8,10 @@ describe('DM relay defaults', () => {
     expect(DEFAULT_DM_RELAYS).toContain('wss://nip17.tomdwyer.uk');
   });
 
-  it('includes additional public relays so startup is not pinned to one host', () => {
-    expect(DEFAULT_DM_RELAYS).toContain('wss://relay.snort.social');
+  it('includes additional public DM-capable relays for fallback delivery attempts', () => {
     expect(DEFAULT_DM_RELAYS).toContain('wss://relay.nostr.band');
     expect(DEFAULT_DM_RELAYS).toContain('wss://offchain.pub');
-    expect(DEFAULT_DM_RELAYS).toContain('wss://relay.nos.social');
+    expect(DEFAULT_DM_RELAYS).toContain('wss://www.nostr.ltd');
   });
 
   it('parses and de-duplicates relay lists', () => {

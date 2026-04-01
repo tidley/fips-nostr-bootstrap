@@ -16,7 +16,8 @@ npm i @fips/nostr-rendezvous
 import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
 
 const server = createFipsNostrRendezvousNode({
-  relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.snort.social', 'wss://relay.nostr.band'],
+  advertRelays: ['wss://offchain.pub', 'wss://www.nostr.ltd', 'wss://relay.nostr.band'],
+  dmRelays: ['wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.nostr.band', 'wss://offchain.pub', 'wss://www.nostr.ltd'],
   trustedNpubs: [], // optional allowlist
   udpPort: 9999,
 });
@@ -26,7 +27,11 @@ console.log('server npub:', server.getNpub());
 // server now publishes a public traversal advert by default
 
 // On another machine/process:
-const client = createFipsNostrRendezvousNode({ relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.snort.social', 'wss://relay.nostr.band'], udpPort: 0 });
+const client = createFipsNostrRendezvousNode({
+  advertRelays: ['wss://offchain.pub', 'wss://www.nostr.ltd', 'wss://relay.nostr.band'],
+  dmRelays: ['wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.nostr.band', 'wss://offchain.pub', 'wss://www.nostr.ltd'],
+  udpPort: 0,
+});
 await client.start();
 const peers = await client.listAdvertisedPeers({ waitMs: 5000 });
 const session = await client.connectToDiscoveredPeer({ discoveryWaitMs: 5000, waitMs: 30000 });
@@ -35,7 +40,7 @@ console.log(session);
 
 If you already know the target identity, `connectToAdvertisedPeer('<SERVER_NPUB>')` is still supported.
 
-If you omit `relays`, the library uses its embedded default relay set.
+If you omit relay settings, the library uses separate embedded defaults for advert relays and DM relays. You can still pass `relays` as a legacy shorthand to use one shared list for both.
 
 `session` includes:
 - `established` state

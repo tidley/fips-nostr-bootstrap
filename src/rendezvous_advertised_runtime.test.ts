@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent } from 'nostr-tools/nip17';
 
-// @ts-expect-error local JS package without type declarations
-import { DEFAULT_RELAYS, createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
+// @ts-ignore local JS package without type declarations
+import { DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_RELAYS, createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 interface TraversalOfferLike {
   type: 'offer';
@@ -32,7 +32,8 @@ describe('advertised rendezvous runtime', () => {
   it('publishes an advert event with relay and STUN metadata', async () => {
     const published: Array<{ relays: string[]; event: { content: string } }> = [];
     const node = createFipsNostrRendezvousNode({
-      relays: ['wss://nip17.com', 'wss://nip17.tomdwyer.uk'],
+      advertRelays: ['wss://offchain.pub', 'wss://www.nostr.ltd'],
+      dmRelays: ['wss://nip17.com', 'wss://relay.nostr.band'],
       udpPort: 0,
       publicHost: '45.77.228.152',
       stunUri: 'stun:fips.tomdwyer.uk:3478',
@@ -55,10 +56,10 @@ describe('advertised rendezvous runtime', () => {
 
     expect(published).toHaveLength(1);
     const [{ relays, event }] = published;
-    expect(relays).toEqual(['wss://nip17.com', 'wss://nip17.tomdwyer.uk']);
+    expect(relays).toEqual(['wss://offchain.pub', 'wss://www.nostr.ltd']);
     const content = JSON.parse(event.content);
     expect(content.publisherNpub).toBe(node.getNpub());
-    expect(content.relays).toEqual(relays);
+    expect(content.relays).toEqual(['wss://nip17.com', 'wss://relay.nostr.band']);
     expect(content.stunServers).toContain('stun:fips.tomdwyer.uk:3478');
     expect(content.transports).toContain('udp');
     expect(content.endpointHint.port).toBe(9999);
@@ -78,6 +79,8 @@ describe('advertised rendezvous runtime', () => {
       advertise: false,
     });
 
+    expect(node.advertRelays).toEqual(DEFAULT_ADVERT_RELAYS);
+    expect(node.dmRelays).toEqual(DEFAULT_DM_RELAYS);
     expect(node.relays).toEqual(DEFAULT_RELAYS);
   });
 
@@ -191,6 +194,35 @@ describe('advertised rendezvous runtime', () => {
 
     expect(adverts).toHaveLength(1);
     expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it('uses the long-lived advert cache when available instead of opening a fresh relay query', async () => {
+    const targetNpub = nip19.npubEncode(getPublicKey(generateSecretKey()));
+    const node = createFipsNostrRendezvousNode({
+      advertRelays: ['wss://offchain.pub'],
+      advertise: false,
+    });
+
+    node.advertSub = { close() {} };
+    node.advertCache.set(targetNpub, {
+      app: 'fips.nat.traversal.v1',
+      publisherNpub: targetNpub,
+      publishedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      relays: ['wss://nip17.com'],
+      stunServers: ['stun:fips.tomdwyer.uk:3478'],
+      transports: ['udp'],
+    });
+    node.pool = {
+      subscribeMany() {
+        throw new Error('should not open one-shot advert subscription when cache is live');
+      },
+    };
+
+    const adverts = await node.listAdvertisedPeers({ waitMs: 250, maxPeers: 1 });
+
+    expect(adverts).toHaveLength(1);
+    expect(adverts[0].publisherNpub).toBe(targetNpub);
   });
 
   it('can exclude its own npub from advert discovery results', async () => {
@@ -367,6 +399,7 @@ describe('advertised rendezvous runtime', () => {
     const targetPubkey = getPublicKey(targetSk);
     const targetNpub = nip19.npubEncode(targetPubkey);
     const published: Array<Record<string, unknown>> = [];
+    const publishedRelaySets: string[][] = [];
     const filters: Array<Record<string, unknown>> = [];
     let dmHandler: ((evt: unknown) => void) | null = null;
 
@@ -386,6 +419,7 @@ describe('advertised rendezvous runtime', () => {
     };
     node.pool = {
       publish(relays: string[], event: { content: string }) {
+        publishedRelaySets.push(relays);
         return relays.map(() => Promise.resolve(true));
       },
       subscribeMany(_relays: string[], _filter: Record<string, unknown>, handlers: { onevent: (evt: unknown) => void }) {
@@ -415,6 +449,7 @@ describe('advertised rendezvous runtime', () => {
       ip: '198.51.100.10',
       port: 40123,
     });
+    expect(publishedRelaySets.every((relays) => relays.every((relay) => node.dmRelays.includes(relay)))).toBe(true);
     expect(filters.some((filter) => Array.isArray(filter['#p']) && filter['#p'][0] === node.pubkey)).toBe(true);
     expect(filters.some((filter) => !('#p' in filter))).toBe(true);
 
@@ -442,6 +477,64 @@ describe('advertised rendezvous runtime', () => {
 
     const conn = await connectPromise;
     expect(conn.remote).toEqual({ host: '203.0.113.20', port: 49000 });
+    expect(conn.targetNpub).toBe(targetNpub);
+  });
+
+  it('can resolve traversal responses via the long-lived DM subscription path', async () => {
+    const targetSk = generateSecretKey();
+    const targetPubkey = getPublicKey(targetSk);
+    const targetNpub = nip19.npubEncode(targetPubkey);
+    const published: Array<Record<string, unknown>> = [];
+
+    const node = createFipsNostrRendezvousNode({
+      dmRelays: ['wss://nip17.com'],
+      udpPort: 0,
+      publicHost: '198.51.100.10',
+      advertise: false,
+    });
+
+    node.sub = { close() {} };
+    node.socket = {
+      address() {
+        return { port: 40123 };
+      },
+      on() {},
+      off() {},
+    };
+    node._publishDM = (_recipientPubkey: string, obj: Record<string, unknown>) => {
+      published.push(obj);
+    };
+    node._startPunch = () => {};
+    node.waitForPunch = async () => ({ established: true, remote: { host: '203.0.113.40', port: 49001 } });
+
+    const connectPromise = node.connect(targetNpub, { waitMs: 2_000, retryMs: 50 });
+
+    const publishedOffer = published.find((msg) => msg.type === 'offer') as TraversalOfferLike | undefined;
+    expect(publishedOffer).toBeDefined();
+    if (!publishedOffer) throw new Error('expected traversal offer');
+
+    node._resolvePendingTraversalResponse(
+      {
+        app: 'fips.nat.traversal.v1',
+        eventKind: 21059,
+        type: 'answer',
+        sessionId: publishedOffer.sessionId,
+        issuedAt: publishedOffer.issuedAt + 100,
+        expiresAt: publishedOffer.expiresAt,
+        nonce: 'answer-nonce-2',
+        senderNpub: targetNpub,
+        recipientNpub: node.getNpub(),
+        inReplyTo: publishedOffer.nonce,
+        accepted: true,
+        reflexiveAddress: { protocol: 'udp', ip: '203.0.113.40', port: 49001 },
+        localAddresses: [{ protocol: 'udp', ip: '192.168.1.30', port: 49001 }],
+        punch: { startAtMs: publishedOffer.issuedAt + 500, intervalMs: 300, durationMs: 30_000 },
+      },
+      targetPubkey,
+    );
+
+    const conn = await connectPromise;
+    expect(conn.remote).toEqual({ host: '203.0.113.40', port: 49001 });
     expect(conn.targetNpub).toBe(targetNpub);
   });
 
@@ -563,6 +656,22 @@ describe('advertised rendezvous runtime', () => {
       remote: { host: '203.0.113.10', port: 40123 },
     });
     expect(startedPunches[0].punch.startAtMs).toBeGreaterThanOrEqual(1_700_000_000_500);
+  });
+
+  it('waits for punch completion via the punch event instead of polling state', async () => {
+    const node = createFipsNostrRendezvousNode({
+      advertise: false,
+    });
+
+    const punchPromise = node.waitForPunch('nonce-1', 1_000);
+    setTimeout(() => {
+      node.emit('punch', { nonce: 'nonce-1', remote: { host: '203.0.113.50', port: 50000 } });
+    }, 10);
+
+    await expect(punchPromise).resolves.toEqual({
+      established: true,
+      remote: { host: '203.0.113.50', port: 50000 },
+    });
   });
 
   it('builds a traversal answer payload from an incoming offer', () => {

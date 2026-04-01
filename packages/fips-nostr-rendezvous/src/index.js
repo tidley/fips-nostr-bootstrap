@@ -11,15 +11,25 @@ const TRAVERSAL_SIGNAL_KIND = 21059;
 const TRAVERSAL_SIGNAL_TTL_MS = 60 * 1000;
 
 export const DEFAULT_RELAYS = [
-  'wss://nos.lol',
-  'wss://relay.damus.io',
-  'wss://relay.primal.net',
+  'wss://offchain.pub',
+  'wss://www.nostr.ltd',
+  'wss://relay.nostr.band',
   'wss://nip17.com',
   'wss://nip17.tomdwyer.uk',
-  'wss://relay.snort.social',
+];
+
+export const DEFAULT_ADVERT_RELAYS = [
+  'wss://offchain.pub',
+  'wss://www.nostr.ltd',
+  'wss://relay.nostr.band',
+];
+
+export const DEFAULT_DM_RELAYS = [
+  'wss://nip17.com',
+  'wss://nip17.tomdwyer.uk',
   'wss://relay.nostr.band',
   'wss://offchain.pub',
-  'wss://relay.nos.social',
+  'wss://www.nostr.ltd',
 ];
 
 async function ensureWs() {
@@ -216,7 +226,9 @@ class FipsStackSession extends EventEmitter {
 export class FipsNostrRendezvousNode extends EventEmitter {
   constructor(opts = {}) {
     super();
-    this.relays = opts.relays ?? DEFAULT_RELAYS;
+    this.advertRelays = opts.advertRelays ?? opts.relays ?? DEFAULT_ADVERT_RELAYS;
+    this.dmRelays = opts.dmRelays ?? opts.relays ?? DEFAULT_DM_RELAYS;
+    this.relays = [...new Set([...this.advertRelays, ...this.dmRelays])];
     this.trustedNpubs = new Set(opts.trustedNpubs ?? []);
     this.publicHost = opts.publicHost;
     this.udpPort = opts.udpPort ?? 9999;
@@ -238,6 +250,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this.punchSessions = new Map();
     this.sessions = new Map();
     this.advertTimer = null;
+    this.advertCache = new Map();
+    this.pendingTraversalResponses = new Map();
+    this.sub = null;
+    this.advertSub = null;
   }
 
   getNpub() {
@@ -285,7 +301,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
     this.sub = subscribeDirectMessages({
       pool: this.pool,
-      relays: this.relays,
+      relays: this.dmRelays,
       recipientPubkey: this.pubkey,
       since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60,
       handlers: {
@@ -297,6 +313,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
             if (this.trustedNpubs.size > 0 && !this.trustedNpubs.has(fromNpub)) {
               this.emit('reject', { reason: 'untrusted-npub', fromNpub });
+              return;
+            }
+
+            if (this._resolvePendingTraversalResponse(msg, rumor.pubkey)) {
               return;
             }
 
@@ -377,6 +397,16 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       },
     });
 
+    this.advertSub = this.pool.subscribeMany(
+      this.advertRelays,
+      { kinds: [ADVERT_KIND], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
+      {
+        onevent: (evt) => {
+          this._handleAdvertEvent(evt);
+        },
+      },
+    );
+
     if (this.advertise) {
       this._publishAdvert();
       this.advertTimer = setInterval(() => this._publishAdvert(), this.advertiseIntervalMs);
@@ -406,6 +436,39 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     const excludedNpubs = new Set(opts.excludePublisherNpubs || []);
     const filter = typeof opts.filter === 'function' ? opts.filter : () => true;
 
+    if (this.advertSub) {
+      const current = this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers });
+      if (current.length > 0) {
+        return current;
+      }
+
+      return await new Promise((resolve) => {
+        let timeout = null;
+        let settleTimer = null;
+
+        const finish = () => {
+          if (timeout) clearTimeout(timeout);
+          if (settleTimer) clearTimeout(settleTimer);
+          this.off('advert:update', onAdvertUpdate);
+          resolve(this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers }));
+        };
+
+        const onAdvertUpdate = () => {
+          const matches = this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers });
+          if (matches.length === 0) return;
+          if (settleMs <= 0) {
+            finish();
+            return;
+          }
+          if (settleTimer) clearTimeout(settleTimer);
+          settleTimer = setTimeout(() => finish(), Math.max(0, settleMs));
+        };
+
+        this.on('advert:update', onAdvertUpdate);
+        timeout = setTimeout(() => finish(), waitMs);
+      });
+    }
+
     return await new Promise((resolve) => {
       let timeout = null;
       let settleTimer = null;
@@ -419,7 +482,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       };
 
       const sub = this.pool.subscribeMany(
-        this.relays,
+        this.advertRelays,
         { kinds: [ADVERT_KIND], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
         {
           onevent: (evt) => {
@@ -432,7 +495,11 @@ export class FipsNostrRendezvousNode extends EventEmitter {
               if (!existing || sortAdverts([msg, existing])[0] === msg) {
                 byPublisher.set(msg.publisherNpub, msg);
               }
-              if (byPublisher.size >= maxPeers && settleMs >= 0) {
+              if (byPublisher.size > 0) {
+                if (settleMs <= 0) {
+                  finish();
+                  return;
+                }
                 if (settleTimer) clearTimeout(settleTimer);
                 settleTimer = setTimeout(() => finish(), settleMs);
               }
@@ -459,7 +526,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
   async connectFromAdvert(advert, opts = {}) {
     if (!isTraversalAdvertMessage(advert)) throw new Error('invalid traversal advert');
-    const conn = await this.connect(advert.publisherNpub, opts);
+    const conn = await this.connect(advert.publisherNpub, {
+      ...opts,
+      dmRelays: opts.dmRelays ?? advert.relays ?? this.dmRelays,
+    });
     return { ...conn, discoveredAdvert: advert };
   }
 
@@ -485,46 +555,69 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
     const waitMs = opts.waitMs || 60000;
     const retryMs = opts.retryMs || 5000;
+    const dmRelays = opts.dmRelays ?? this.dmRelays;
 
     const response = await new Promise((resolve, reject) => {
       const started = Date.now();
       let timer;
-      const sub = subscribeDirectMessages({
-        pool: this.pool,
-        relays: this.relays,
-        recipientPubkey: this.pubkey,
-        since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60,
-        handlers: {
-          onevent: async (evt) => {
-            try {
-              const rumor = unwrapEvent(evt, this.sk);
-              if (rumor.pubkey !== targetPubkey) return;
-              const msg = JSON.parse(rumor.content);
-              if (isTraversalAnswerMessage(msg)) {
-                if (msg.sessionId !== offer.sessionId || msg.inReplyTo !== offer.nonce || msg.recipientNpub !== this.npub) return;
-                clearInterval(timer);
-                sub.close();
-                resolve(msg);
-                return;
-              }
-              if (msg?.type !== 'fips.rendezvous.server-info' || msg?.nonce !== offer.nonce) return;
-              clearInterval(timer);
-              sub.close();
-              resolve(msg);
-            } catch {
-              // ignore
-            }
+      const closePending = () => {
+        if (timer) clearInterval(timer);
+        this.pendingTraversalResponses.delete(offer.nonce);
+      };
+
+      let tempSub = null;
+      if (this.sub) {
+        this.pendingTraversalResponses.set(offer.nonce, {
+          targetPubkey,
+          sessionId: offer.sessionId,
+          nonce: offer.nonce,
+          recipientNpub: this.npub,
+          resolve: (msg) => {
+            closePending();
+            resolve(msg);
           },
-        },
-      });
+        });
+      } else {
+        tempSub = subscribeDirectMessages({
+          pool: this.pool,
+          relays: dmRelays,
+          recipientPubkey: this.pubkey,
+          since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60,
+          handlers: {
+            onevent: async (evt) => {
+              try {
+                const rumor = unwrapEvent(evt, this.sk);
+                const msg = JSON.parse(rumor.content);
+                if (!this._matchesPendingTraversalResponse({
+                  entry: {
+                    targetPubkey,
+                    sessionId: offer.sessionId,
+                    nonce: offer.nonce,
+                    recipientNpub: this.npub,
+                  },
+                  msg,
+                  rumorPubkey: rumor.pubkey,
+                })) return;
+                closePending();
+                try { tempSub.close(); } catch {}
+                resolve(msg);
+              } catch {
+                // ignore
+              }
+            },
+          },
+        });
+      }
 
       this._publishDM(targetPubkey, offer, {
+        relays: dmRelays,
         kind: 'offer',
         nonce: offer.nonce,
         sessionId: offer.sessionId,
         toPubkey: targetPubkey,
       });
       this._publishDM(targetPubkey, hello, {
+        relays: dmRelays,
         kind: 'hello-fallback',
         nonce: hello.nonce,
         sessionId: hello.sessionId,
@@ -533,18 +626,20 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
       timer = setInterval(() => {
         if (Date.now() - started > waitMs) {
-          clearInterval(timer);
-          sub.close();
+          closePending();
+          try { tempSub?.close(); } catch {}
           reject(new Error('timed out waiting for traversal answer'));
           return;
         }
         this._publishDM(targetPubkey, offer, {
+          relays: dmRelays,
           kind: 'offer-retry',
           nonce: offer.nonce,
           sessionId: offer.sessionId,
           toPubkey: targetPubkey,
         });
         this._publishDM(targetPubkey, hello, {
+          relays: dmRelays,
           kind: 'hello-fallback-retry',
           nonce: hello.nonce,
           sessionId: hello.sessionId,
@@ -582,20 +677,21 @@ export class FipsNostrRendezvousNode extends EventEmitter {
   }
 
   waitForPunch(nonceValue, timeoutMs = 35000) {
+    const existing = this.punchSessions.get(nonceValue);
+    if (existing?.established) return Promise.resolve(existing);
+
     return new Promise((resolve) => {
-      const started = Date.now();
-      const timer = setInterval(() => {
-        const st = this.punchSessions.get(nonceValue);
-        if (st?.established) {
-          clearInterval(timer);
-          resolve(st);
-          return;
-        }
-        if (Date.now() - started > timeoutMs) {
-          clearInterval(timer);
-          resolve(null);
-        }
-      }, 100);
+      const onPunch = ({ nonce, remote }) => {
+        if (nonce !== nonceValue) return;
+        clearTimeout(timer);
+        this.off('punch', onPunch);
+        resolve({ established: true, remote });
+      };
+      const timer = setTimeout(() => {
+        this.off('punch', onPunch);
+        resolve(null);
+      }, timeoutMs);
+      this.on('punch', onPunch);
     });
   }
 
@@ -613,14 +709,17 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     }, Math.max(0, startAtMs - Date.now()));
   }
 
-  _publishDM(recipientPubkey, obj, logContext) {
+  _publishDM(recipientPubkey, obj, logContext = {}) {
     publishDM({
       pool: this.pool,
-      relays: this.relays,
+      relays: logContext.relays ?? this.dmRelays,
       sk: this.sk,
       recipientPubkey,
       obj,
-      logContext,
+      logContext: {
+        ...logContext,
+        relays: undefined,
+      },
     });
   }
 
@@ -701,9 +800,12 @@ export class FipsNostrRendezvousNode extends EventEmitter {
   close() {
     if (this.advertTimer) clearInterval(this.advertTimer);
     this.sub?.close();
+    this.advertSub?.close();
     this.pool?.close(this.relays);
     for (const s of this.sessions.values()) s.close();
     this.sessions.clear();
+    this.advertCache.clear();
+    this.pendingTraversalResponses.clear();
     this.socket.close();
   }
 
@@ -719,7 +821,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       publishedAt: now,
       expiresAt: now + this.advertiseTtlMs,
       sequence: now,
-      relays: this.relays,
+      relays: this.dmRelays,
       stunServers: [this.stunUri || `stun:${host}:${this.stunPort}`],
       transports: ['udp'],
       endpointHint: { host, port: local.port },
@@ -732,11 +834,54 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     }, this.sk);
     publishEvent({
       pool: this.pool,
-      relays: this.relays,
+      relays: this.advertRelays,
       sk: this.sk,
       evt,
       logContext: { kind: 'advert', npub: this.npub },
     });
+  }
+
+  _handleAdvertEvent(evt) {
+    try {
+      const msg = JSON.parse(evt.content);
+      if (!isTraversalAdvertMessage(msg)) return false;
+      const existing = this.advertCache.get(msg.publisherNpub);
+      if (!existing || sortAdverts([msg, existing])[0] === msg) {
+        this.advertCache.set(msg.publisherNpub, msg);
+        this.emit('advert:update', msg);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  _selectAdvertisedPeers({ excludedNpubs = new Set(), filter = () => true, maxPeers = 20 } = {}) {
+    return sortAdverts(
+      [...this.advertCache.values()].filter((msg) => !excludedNpubs.has(msg.publisherNpub) && filter(msg)),
+    ).slice(0, maxPeers);
+  }
+
+  _matchesPendingTraversalResponse({ entry, msg, rumorPubkey }) {
+    if (rumorPubkey !== entry.targetPubkey) return false;
+    if (isTraversalAnswerMessage(msg)) {
+      return (
+        msg.sessionId === entry.sessionId &&
+        msg.inReplyTo === entry.nonce &&
+        msg.recipientNpub === entry.recipientNpub
+      );
+    }
+    return msg?.type === 'fips.rendezvous.server-info' && msg?.nonce === entry.nonce;
+  }
+
+  _resolvePendingTraversalResponse(msg, rumorPubkey) {
+    const key = isTraversalAnswerMessage(msg) ? msg.inReplyTo : msg?.nonce;
+    if (!key) return false;
+    const entry = this.pendingTraversalResponses.get(key);
+    if (!entry) return false;
+    if (!this._matchesPendingTraversalResponse({ entry, msg, rumorPubkey })) return false;
+    entry.resolve(msg);
+    return true;
   }
 }
 

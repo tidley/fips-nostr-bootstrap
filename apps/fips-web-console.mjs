@@ -2,7 +2,11 @@
 import 'dotenv/config';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { createFipsNostrRendezvousNode, DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
+import {
+  createFipsNostrRendezvousNode,
+  DEFAULT_ADVERT_RELAYS,
+  DEFAULT_DM_RELAYS,
+} from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -13,11 +17,15 @@ const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
 const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const effectiveRelays = relays.length ? relays : [...DEFAULT_RELAYS];
+const advertRelays = (arg('--advert-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const dmRelays = (arg('--dm-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveAdvertRelays = relays.length ? [...relays] : (advertRelays.length ? advertRelays : [...DEFAULT_ADVERT_RELAYS]);
+const effectiveDmRelays = relays.length ? [...relays] : (dmRelays.length ? dmRelays : [...DEFAULT_DM_RELAYS]);
 
 const node = createFipsNostrRendezvousNode({
   udpPort,
-  relays: effectiveRelays,
+  advertRelays: effectiveAdvertRelays,
+  dmRelays: effectiveDmRelays,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
   advertise: false,
@@ -429,8 +437,9 @@ server.listen(httpPort, () => {
     http: `http://127.0.0.1:${httpPort}`,
     npub: started.npub,
     udpPort: started.udpPort,
-    relays: effectiveRelays,
-    relaySource: relays.length ? 'cli' : 'embedded-defaults',
+    advertRelays: effectiveAdvertRelays,
+    dmRelays: effectiveDmRelays,
+    relaySource: relays.length ? 'cli-shared' : ((advertRelays.length || dmRelays.length) ? 'cli-split' : 'embedded-defaults'),
   }, null, 2));
 });
 
