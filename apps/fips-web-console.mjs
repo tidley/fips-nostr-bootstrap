@@ -316,12 +316,12 @@ const server = http.createServer(async (req, res) => {
         const { npub } = JSON.parse(b || '{}');
         console.log('[web-console] connect request', JSON.stringify({
           target: npub || '(first-discovered-peer)',
-          mode: npub ? 'explicit-npub' : 'advert-discovery',
+          mode: npub ? 'explicit-npub-direct' : 'advert-discovery',
         }));
         if (npub && npub === started.npub) throw new Error('refusing to connect to self');
         const conn = discoveryEnabled
           ? (npub
-              ? await node.connectToAdvertisedPeer(npub, { discoveryWaitMs: 60000, waitMs: 60000 })
+              ? await node.connect(npub, { waitMs: 60000 })
               : await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 }))
           : await node.connect(npub, { waitMs: 60000 });
         attachSession(conn.nonce, conn.remote, conn.session);

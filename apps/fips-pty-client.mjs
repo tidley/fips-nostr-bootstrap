@@ -39,7 +39,7 @@ if (discoveryEnabled && !targetNpub) {
 
 const conn = discoveryEnabled
   ? (targetNpub
-      ? await node.connectToAdvertisedPeer(targetNpub, { discoveryWaitMs: waitMs, waitMs })
+      ? await node.connect(targetNpub, { waitMs })
       : await node.connectToDiscoveredPeer({ discoveryWaitMs: waitMs, waitMs }))
   : await node.connect(targetNpub, { waitMs });
 console.error('[connected]', conn.remote);
