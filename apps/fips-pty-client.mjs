@@ -12,7 +12,7 @@ const targetNpub = arg('--npub', '');
 
 const waitMs = Number(arg('--wait', '60000'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const node = createFipsNostrRendezvousNode({

@@ -10,6 +10,10 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     'wss://relay.primal.net',
     'wss://nip17.com',
     'wss://nip17.tomdwyer.uk',
+    'wss://relay.snort.social',
+    'wss://relay.nostr.band',
+    'wss://offchain.pub',
+    'wss://relay.nos.social',
   ];
 
   const fromQuery = (() => {

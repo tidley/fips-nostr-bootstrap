@@ -45,7 +45,7 @@ npm install
 
 ```bash
 cat > .env <<'EOF'
-NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk
+NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social
 # Include modified Chapar relay for PoC signaling classification if needed:
 # NOSTR_RELAYS=wss://nip17.tomdwyer.uk,wss://<your-chapar-relay>
 # Optional fixed identity (recommended for stable npub):

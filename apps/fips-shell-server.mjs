@@ -12,7 +12,7 @@ function arg(name, fallback = '') {
 
 const udpPort = Number(arg('--udp-port', '9999'));
 const trusted = (arg('--trusted-npubs', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const node = createFipsNostrRendezvousNode({

@@ -12,7 +12,7 @@ function arg(name, fallback = '') {
 const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const node = createFipsNostrRendezvousNode({
@@ -83,6 +83,10 @@ const pending = new Map();
 function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
 function init(){ term.value=''; writeLine('Connected UI ready. Discover peers or paste an npub and press Connect.'); setPrompt(); }
+function shortNpub(npub){
+  if (!npub || npub.length <= 10) return npub || '';
+  return npub.slice(0, 5) + '...' + npub.slice(-5);
+}
 function setTransportBusy(busy, label){
   transportBusy = busy;
   connectBtn.disabled = busy;
@@ -211,7 +215,7 @@ async function refreshPeers() {
     }
     peersEl.innerHTML = d.peers.map((peer, index) =>
       '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
-      'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
+      'Peer ' + (index + 1) + ' ' + shortNpub(peer.publisherNpub) +
       '</button>'
     ).join('');
     for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
@@ -232,15 +236,16 @@ document.getElementById('connect').onclick = async () => {
   if (transportBusy) return;
   const npub = document.getElementById('npub').value.trim();
   try {
-    setTransportBusy(true, npub ? 'Status: connecting to ' + npub.slice(0, 16) + '...' : 'Status: connecting to discovered peer...');
-    writeLine(npub ? ('[connect] dialing ' + npub) : '[connect] dialing first discovered peer');
+    setTransportBusy(true, npub ? 'Status: coordinating with ' + shortNpub(npub) : 'Status: coordinating with discovered peer...');
+    writeLine(npub ? ('[connect] dialing ' + shortNpub(npub)) : '[connect] dialing first discovered peer');
+    writeLine('[connect] waiting for relay coordination and UDP session establishment; this can take tens of seconds');
     const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
     const d = await r.json();
     if (!d.ok) {
       writeLine('[connect error] ' + d.error);
       setTransportBusy(false, 'Status: idle');
     } else {
-      const source = d.discoveredAdvert?.publisherNpub ? ' via advert ' + d.discoveredAdvert.publisherNpub : '';
+      const source = d.discoveredAdvert?.publisherNpub ? ' via advert ' + shortNpub(d.discoveredAdvert.publisherNpub) : '';
       writeLine('[connected] ' + d.sessionId + source);
     }
   } catch (err) {
