@@ -73,6 +73,7 @@ const statusEl = document.getElementById('status');
 const peersEl = document.getElementById('peers');
 const connectBtn = document.getElementById('connect');
 const discoverBtn = document.getElementById('discover');
+let activeState = null;
 let prompt = 'fips@peer:$ ';
 let cmdInFlight = false;
 let transportBusy = false;
@@ -174,6 +175,7 @@ term.addEventListener('keydown', async (e) => {
 const es = new EventSource('/api/events');
 es.addEventListener('status', ev => {
   const d = JSON.parse(ev.data);
+  activeState = d.connected ? { sessionId: d.sessionId, remote: d.remote } : null;
   statusEl.textContent = d.connected ? ('Status: connected ' + d.sessionId + ' -> ' + d.remote.host + ':' + d.remote.port) : 'Status: idle';
   if (d.connected) setTransportBusy(false);
 });
@@ -199,10 +201,10 @@ es.addEventListener('result', ev => {
 
 es.onerror = () => {
   if (es.readyState === EventSource.CLOSED) {
-    if (!active) statusEl.textContent = 'Status: event stream closed';
+    if (!activeState) statusEl.textContent = 'Status: event stream closed';
     return;
   }
-  if (!active && !transportBusy) statusEl.textContent = 'Status: reconnecting event stream...';
+  if (!activeState && !transportBusy) statusEl.textContent = 'Status: reconnecting event stream...';
 };
 
 window.addEventListener('beforeunload', () => {
@@ -240,8 +242,8 @@ async function refreshPeers() {
   } catch (err) {
     writeLine('[discover error] ' + String(err.message || err));
   } finally {
-    if (!active) setTransportBusy(false, 'Status: idle');
-    else setTransportBusy(false, 'Status: connected ' + active.sessionId + ' -> ' + active.remote.host + ':' + active.remote.port);
+    if (!activeState) setTransportBusy(false, 'Status: idle');
+    else setTransportBusy(false, 'Status: connected ' + activeState.sessionId + ' -> ' + activeState.remote.host + ':' + activeState.remote.port);
   }
 }
 
