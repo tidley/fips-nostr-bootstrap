@@ -12,6 +12,7 @@ export interface RelayEvent {
 
 type RelayFilter = {
   kinds?: number[];
+  authors?: string[];
   '#p'?: string[];
 };
 
@@ -24,6 +25,7 @@ type Subscription = {
 
 function matchesFilter(evt: RelayEvent, filter: RelayFilter): boolean {
   if (filter.kinds && !filter.kinds.includes(evt.kind)) return false;
+  if (filter.authors && filter.authors.length > 0 && !filter.authors.includes(evt.pubkey)) return false;
   const pFilter = filter['#p'];
   if (pFilter && pFilter.length > 0) {
     const pTags = evt.tags.filter((t) => t[0] === 'p').map((t) => t[1]);

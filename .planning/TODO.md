@@ -100,6 +100,62 @@ Tasks:
 - [x] Add advert-browsing runtime path that can connect without a pre-known `npub`
 - [ ] Update remaining app/test entry points to assume `offer` / `answer` first and `hello` fallback second
 
+### Slice 8: Runtime hardening toward issue #37
+
+Outcome:
+- live runtime uses STUN reflexive addresses and recipient inbox relay hints instead of only local interface guesses
+
+Tasks:
+- [x] Add live STUN observation on the JS rendezvous socket with fallback across configured STUN servers
+- [x] Feed STUN-derived reflexive/local addresses into advert publish and offer / answer creation
+- [x] Publish `kind 10050` inbox relay metadata with sensible defaults
+- [x] Resolve recipient inbox relay hints from `kind 10050` before DM signaling, with default relay fallback
+- [x] Replace JSON-only punch packets with binary punch / ack support using session-hash magic values
+- [x] Add public-event cleanup metadata: NIP-40 expiration on adverts and NIP-09 deletion for superseded/shutdown public events
+- [ ] Add disappearing-message cleanup for wrapped DM signaling events
+
+### Slice 9: Reliability and topology verification
+
+Outcome:
+- repo has explicit regression coverage for NAT edge cases and multi-client runtime behavior
+
+Tasks:
+- [x] Add runtime STUN integration test against a fake local STUN server
+- [x] Add simulated NAT integration tests for LAN-preferred success and symmetric NAT fallback
+- [x] Add shared-socket multi-client integration test to prove current runtime can multiplex sessions
+- [ ] Add same-subnet parallel local+reflexive punch attempts in the live JS runtime
+- [ ] Add Docker/netns-style NAT integration beyond the pure simulation layer
+- [ ] Add recipient `kind 10050` lookup against live public relays in the live suite
+
+### Slice 10: Functional migration onto Rust
+
+Outcome:
+- long-running functional runtime moves from the JS package into Rust, while `.mjs` remains acceptable for UI/test harnesses
+
+Tasks:
+- [x] Add Rust long-running shell server binary interoperable with the current JS client/web console path
+- [x] Publish adverts and inbox relay metadata from Rust
+- [x] Receive gift-wrapped DMs and answer legacy `hello -> server-info` from Rust
+- [x] Perform binary punch / ack and shell-session handling from Rust
+- [x] Add JS/Rust interop coverage with the embedded relay harness
+- [ ] Move the dialing/client runtime into Rust
+- [ ] Decide whether `.mjs` UI should spawn a Rust local daemon or call a Rust HTTP bridge
+- [ ] Port offer / answer handling into the Rust runtime so the legacy `hello` path can become fallback-only
+- [ ] Port STUN refresh and LAN-parallel candidate attempts into the Rust runtime
+
+### Auto-connect / retry / fallback checklist
+
+- [ ] Add peer config flag for NAT traversal enablement in downstream consumers
+- [ ] Try advert discovery first for configured NAT peers before direct UDP assumptions
+- [ ] Resolve recipient `kind 10050` inbox relays before each new DM signaling session
+- [ ] Refresh STUN observation before each new outbound traversal attempt
+- [ ] Retry offer delivery with exponential backoff instead of fixed 5s cadence
+- [ ] Apply a short punch timeout path distinct from the longer relay-answer timeout
+- [ ] Detect symmetric NAT / unrecoverable direct failure and mark the attempt as non-punchable
+- [ ] Fall back to alternate configured transports (TCP/Tor/FIPS-specific fallback) after punch failure
+- [ ] Persist failure reason taxonomy for relay timeout vs STUN failure vs punch timeout vs symmetric NAT
+- [ ] Add reconnect scheduling so failed traversal attempts feed the existing auto-connect loop cleanly
+
 ## Nice-to-have after Slice 7
 
 - capture/replay harness for signaling transcripts
@@ -117,6 +173,6 @@ Tasks:
 - Completed: Slice 6, test-first
 - In progress: Slice 7
 - Next concrete test target:
-  - verify the package runtime against live relay/server behavior with traversal `answer` handling
   - tighten relay-delivery failure handling in the live suite
-  - exercise advert-only discovery on public relays rather than only the embedded relay
+  - add recipient `kind 10050` lookup against real public relays
+  - implement live LAN optimization with parallel local + reflexive attempts

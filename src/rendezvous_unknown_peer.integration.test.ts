@@ -1,7 +1,7 @@
+// @ts-nocheck
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { useWebSocketImplementation } from 'nostr-tools/relay';
 import { startEmbeddedRelay } from './embedded_relay.js';
-// @ts-expect-error local JS package without type declarations
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 const runUnknownPeerE2E = process.env.RUN_UNKNOWN_PEER_E2E === '1';
