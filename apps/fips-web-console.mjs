@@ -169,6 +169,29 @@ es.addEventListener('result', ev => {
   cmdInFlight = false;
 });
 
+async function refreshPeers() {
+  const r = await fetch('/api/discover');
+  const d = await r.json();
+  if (!d.ok) {
+    peersEl.textContent = 'Discovery failed: ' + d.error;
+    return;
+  }
+  if (!d.peers.length) {
+    peersEl.textContent = 'No active traversal adverts found';
+    return;
+  }
+  peersEl.innerHTML = d.peers.map((peer, index) =>
+    '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
+    'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
+    '</button>'
+  ).join('');
+  for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
+    btn.onclick = () => {
+      document.getElementById('npub').value = btn.getAttribute('data-npub');
+    };
+  }
+}
+
 document.getElementById('connect').onclick = async () => {
   const npub = document.getElementById('npub').value.trim();
   const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
@@ -293,25 +316,3 @@ process.on('SIGINT', () => {
   node.close();
   process.exit(0);
 });
-async function refreshPeers() {
-  const r = await fetch('/api/discover');
-  const d = await r.json();
-  if (!d.ok) {
-    peersEl.textContent = 'Discovery failed: ' + d.error;
-    return;
-  }
-  if (!d.peers.length) {
-    peersEl.textContent = 'No active traversal adverts found';
-    return;
-  }
-  peersEl.innerHTML = d.peers.map((peer, index) =>
-    '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
-    'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
-    '</button>'
-  ).join('');
-  for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
-    btn.onclick = () => {
-      document.getElementById('npub').value = btn.getAttribute('data-npub');
-    };
-  }
-}
