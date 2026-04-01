@@ -180,6 +180,18 @@ es.addEventListener('result', ev => {
   cmdInFlight = false;
 });
 
+es.onerror = () => {
+  if (es.readyState === EventSource.CLOSED) {
+    if (!active) statusEl.textContent = 'Status: event stream closed';
+    return;
+  }
+  if (!active && !transportBusy) statusEl.textContent = 'Status: reconnecting event stream...';
+};
+
+window.addEventListener('beforeunload', () => {
+  try { es.close(); } catch {}
+});
+
 async function refreshPeers() {
   if (transportBusy) return;
   try {
@@ -257,8 +269,16 @@ const server = http.createServer(async (req, res) => {
       connection: 'keep-alive',
     });
     eventClients.add(res);
+    const keepalive = setInterval(() => {
+      try {
+        res.write(': keepalive\\n\\n');
+      } catch {}
+    }, 15000);
     res.write(`event: status\ndata: ${JSON.stringify({ connected: !!active, sessionId: active?.sessionId || null, remote: active?.remote || null })}\n\n`);
-    req.on('close', () => eventClients.delete(res));
+    req.on('close', () => {
+      clearInterval(keepalive);
+      eventClients.delete(res);
+    });
     return;
   }
 
