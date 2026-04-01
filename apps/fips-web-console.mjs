@@ -77,8 +77,9 @@ const effectiveDmRelays = relays.length ? [...relays] : (dmRelays.length ? dmRel
 
 const daemonPort = Number(arg('--daemon-port', String(await reservePort())));
 const rustDaemonBinary = `${process.cwd()}/rust/fips-nostr-rendezvous/target/debug/fips-web-daemon`;
-const daemonCommand = existsSync(rustDaemonBinary) ? rustDaemonBinary : 'cargo';
-const daemonArgs = existsSync(rustDaemonBinary)
+const hasPrebuiltDaemon = existsSync(rustDaemonBinary);
+const daemonCommand = hasPrebuiltDaemon ? rustDaemonBinary : 'cargo';
+const daemonArgs = hasPrebuiltDaemon
   ? [
       '--nsec',
       process.env.NOSTR_NSEC || '',
@@ -123,6 +124,9 @@ const daemon = spawn(daemonCommand, daemonArgs, {
   env: { ...process.env },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
+daemon.on('error', (error) => {
+  console.error('[web-console] failed to start rust daemon', JSON.stringify({ error: String(error) }));
+});
 daemon.stdout.on('data', (chunk) => process.stdout.write(String(chunk)));
 daemon.stderr.on('data', (chunk) => process.stderr.write(String(chunk)));
 daemon.on('exit', (code, signal) => {
@@ -131,7 +135,8 @@ daemon.on('exit', (code, signal) => {
 });
 
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
-const meta = await waitForJson(`${daemonBase}/api/meta`);
+const daemonStartupTimeoutMs = hasPrebuiltDaemon ? 15000 : 90000;
+const meta = await waitForJson(`${daemonBase}/api/meta`, daemonStartupTimeoutMs);
 
 const html = `<!doctype html>
 <html><head><meta charset="utf-8"/><title>FIPS SSH-like Console</title>
