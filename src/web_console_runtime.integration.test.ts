@@ -245,4 +245,34 @@ describe('web console runtime app integration', () => {
     expect(clientApp.stdout.join('')).toContain('[web-console] connect request');
     expect(serverApp.stdout.join('')).toContain('[session]');
   }, 45000);
+
+  it('prefers an observed advert when connecting to an explicitly entered npub', async () => {
+    const discovered = await waitFor(
+      async () => {
+        const response = await fetch(`http://127.0.0.1:${httpPort}/api/discover`);
+        return response.json() as Promise<{ ok: boolean; peers: Array<{ publisherNpub: string }> }>;
+      },
+      (body) => body.ok && body.peers.some((peer) => peer.publisherNpub === serverNpub),
+      15000,
+      500,
+    );
+
+    expect(discovered.peers.some((peer) => peer.publisherNpub === serverNpub)).toBe(true);
+
+    const connectResponse = await fetch(`http://127.0.0.1:${httpPort}/api/connect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ npub: serverNpub }),
+    });
+    const connected = await connectResponse.json() as {
+      ok: boolean;
+      sessionId?: string;
+      discoveredAdvert?: { publisherNpub: string } | null;
+      error?: string;
+    };
+
+    expect(connected.ok, `explicit connect failed: ${connected.error || 'unknown'}\nweb stdout:\n${clientApp.stdout.join('')}\nweb stderr:\n${clientApp.stderr.join('')}\nserver stdout:\n${serverApp.stdout.join('')}\nserver stderr:\n${serverApp.stderr.join('')}`).toBe(true);
+    expect(connected.discoveredAdvert?.publisherNpub).toBe(serverNpub);
+    expect(clientApp.stdout.join('')).toContain('[web-console] target advert observed');
+  }, 45000);
 });
