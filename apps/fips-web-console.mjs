@@ -321,11 +321,30 @@ const server = http.createServer(async (req, res) => {
           mode: npub ? 'explicit-npub-direct' : 'advert-discovery',
         }));
         if (npub && npub === started.npub) throw new Error('refusing to connect to self');
-        const conn = discoveryEnabled
-          ? (npub
-              ? await node.connect(npub, { waitMs: 60000 })
-              : await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 }))
-          : await node.connect(npub, { waitMs: 60000 });
+        let conn;
+        if (discoveryEnabled) {
+          if (npub) {
+            try {
+              const advert = await node.findAdvertisedPeer(npub, { waitMs: 2000, settleMs: 500 });
+              console.log('[web-console] target advert observed', JSON.stringify({
+                target: npub,
+                advertRelays: advert.relays,
+                publishedAt: advert.publishedAt,
+              }));
+              conn = await node.connectFromAdvert(advert, { waitMs: 60000 });
+            } catch (err) {
+              console.warn('[web-console] target advert not observed; falling back to direct connect', JSON.stringify({
+                target: npub,
+                error: String(err.message || err),
+              }));
+              conn = await node.connect(npub, { waitMs: 60000 });
+            }
+          } else {
+            conn = await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 });
+          }
+        } else {
+          conn = await node.connect(npub, { waitMs: 60000 });
+        }
         attachSession(conn.nonce, conn.remote, conn.session);
         console.log('[web-console] connect success', JSON.stringify({
           sessionId: conn.nonce,
