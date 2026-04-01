@@ -8,7 +8,7 @@ function arg(name, fallback = '') {
 }
 
 const port = Number(arg('--port', '8088'));
-const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const rawHtml = `<!doctype html>

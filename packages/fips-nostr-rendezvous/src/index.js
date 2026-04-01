@@ -191,6 +191,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       'wss://relay.primal.net',
       'wss://nip17.com',
       'wss://nip17.tomdwyer.uk',
+      'wss://relay.snort.social',
+      'wss://relay.nostr.band',
+      'wss://offchain.pub',
+      'wss://relay.nos.social',
     ];
     this.trustedNpubs = new Set(opts.trustedNpubs ?? []);
     this.publicHost = opts.publicHost;

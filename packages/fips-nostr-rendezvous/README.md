@@ -16,7 +16,7 @@ npm i @fips/nostr-rendezvous
 import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
 
 const server = createFipsNostrRendezvousNode({
-  relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk'],
+  relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.snort.social', 'wss://relay.nostr.band'],
   trustedNpubs: [], // optional allowlist
   udpPort: 9999,
 });
@@ -26,7 +26,7 @@ console.log('server npub:', server.getNpub());
 // server now publishes a public traversal advert by default
 
 // On another machine/process:
-const client = createFipsNostrRendezvousNode({ relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk'], udpPort: 0 });
+const client = createFipsNostrRendezvousNode({ relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.snort.social', 'wss://relay.nostr.band'], udpPort: 0 });
 await client.start();
 const peers = await client.listAdvertisedPeers({ waitMs: 5000 });
 const session = await client.connectToDiscoveredPeer({ discoveryWaitMs: 5000, waitMs: 30000 });
