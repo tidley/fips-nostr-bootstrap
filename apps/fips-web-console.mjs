@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
+import { createFipsNostrRendezvousNode, DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -12,12 +12,12 @@ function arg(name, fallback = '') {
 const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
-  .split(',').map((s) => s.trim()).filter(Boolean);
+const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveRelays = relays.length ? relays : [...DEFAULT_RELAYS];
 
 const node = createFipsNostrRendezvousNode({
   udpPort,
-  relays,
+  relays: effectiveRelays,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
   advertise: false,
@@ -84,8 +84,20 @@ function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollH
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
 function init(){ term.value=''; writeLine('Connected UI ready. Discover peers or paste an npub and press Connect.'); setPrompt(); }
 function shortNpub(npub){
-  if (!npub || npub.length <= 10) return npub || '';
-  return npub.slice(0, 5) + '...' + npub.slice(-5);
+  if (!npub || npub.length <= 11) return npub || '';
+  return npub.slice(0, 6) + '...' + npub.slice(-5);
+}
+function formatAdvertAge(publishedAt){
+  if (!publishedAt) return 'age unknown';
+  const ageMs = Math.max(0, Date.now() - Number(publishedAt));
+  const ageSec = Math.floor(ageMs / 1000);
+  if (ageSec < 60) return ageSec + 's ago';
+  const ageMin = Math.floor(ageSec / 60);
+  if (ageMin < 60) return ageMin + 'm ago';
+  const ageHr = Math.floor(ageMin / 60);
+  if (ageHr < 24) return ageHr + 'h ago';
+  const ageDay = Math.floor(ageHr / 24);
+  return ageDay + 'd ago';
 }
 function setTransportBusy(busy, label){
   transportBusy = busy;
@@ -215,7 +227,7 @@ async function refreshPeers() {
     }
     peersEl.innerHTML = d.peers.map((peer, index) =>
       '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
-      'Peer ' + (index + 1) + ' ' + shortNpub(peer.publisherNpub) +
+      'Peer ' + (index + 1) + ' ' + shortNpub(peer.publisherNpub) + ' (' + formatAdvertAge(peer.publishedAt) + ')' +
       '</button>'
     ).join('');
     for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
@@ -374,7 +386,8 @@ server.listen(httpPort, () => {
     http: `http://127.0.0.1:${httpPort}`,
     npub: started.npub,
     udpPort: started.udpPort,
-    relays,
+    relays: effectiveRelays,
+    relaySource: relays.length ? 'cli' : 'embedded-defaults',
   }, null, 2));
 });
 

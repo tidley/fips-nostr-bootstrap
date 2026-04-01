@@ -3,7 +3,7 @@ import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent } from 'nostr-tools/nip17';
 
 // @ts-expect-error local JS package without type declarations
-import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
+import { DEFAULT_RELAYS, createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 interface TraversalOfferLike {
   type: 'offer';
@@ -71,6 +71,14 @@ describe('advertised rendezvous runtime', () => {
     });
 
     expect(node.udpPort).toBe(0);
+  });
+
+  it('uses embedded relay defaults when no relay list is provided', () => {
+    const node = createFipsNostrRendezvousNode({
+      advertise: false,
+    });
+
+    expect(node.relays).toEqual(DEFAULT_RELAYS);
   });
 
   it('discovers an advertised peer by npub', async () => {

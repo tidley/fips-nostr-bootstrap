@@ -35,6 +35,8 @@ console.log(session);
 
 If you already know the target identity, `connectToAdvertisedPeer('<SERVER_NPUB>')` is still supported.
 
+If you omit `relays`, the library uses its embedded default relay set.
+
 `session` includes:
 - `established` state
 - selected `remote` endpoint

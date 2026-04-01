@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import http from 'node:http';
+import { DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -8,8 +9,8 @@ function arg(name, fallback = '') {
 }
 
 const port = Number(arg('--port', '8088'));
-const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
-  .split(',').map((s) => s.trim()).filter(Boolean);
+const relayList = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveRelayList = relayList.length ? relayList : [...DEFAULT_RELAYS];
 
 const rawHtml = `<!doctype html>
 <html>
@@ -159,7 +160,7 @@ import jsQR from 'https://esm.sh/jsqr@1.4.0';
 import QRCode from 'https://esm.sh/qrcode@1.5.3';
 
 (() => {
-  const RELAYS = ${JSON.stringify(relayList)};
+  const RELAYS = ${JSON.stringify(effectiveRelayList)};
   const APP = 'fips.video.v1';
   const DEFAULT_STUN_URLS = [
     ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:fips.tomdwyer.uk:3478')},
@@ -1005,6 +1006,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}`, relays: relayList }, null, 2));
+  console.log(JSON.stringify({ app: 'fips-video-chat', url: `http://0.0.0.0:${port}`, relays: effectiveRelayList, relaySource: relayList.length ? 'cli' : 'embedded-defaults' }, null, 2));
 });
 ;
