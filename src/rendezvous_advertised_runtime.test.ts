@@ -84,6 +84,38 @@ describe('advertised rendezvous runtime', () => {
     expect(node.relays).toEqual(DEFAULT_RELAYS);
   });
 
+  it('does not attach a global automatic relay auth hook on startup', async () => {
+    const node = createFipsNostrRendezvousNode({
+      advertise: false,
+      udpPort: 0,
+    });
+
+    const socketOn = () => {};
+    node.socket = {
+      once() {},
+      bind(_port: number, _host: string, cb: () => void) {
+        cb();
+      },
+      on: socketOn,
+      address() {
+        return { port: 40123 };
+      },
+      close() {},
+    };
+
+    const originalPool = node.pool;
+    let capturedPool = null;
+    node.pool = originalPool;
+
+    const OriginalSimplePool = node.pool?.constructor;
+    await node.start();
+    capturedPool = node.pool;
+
+    expect(capturedPool.automaticallyAuth).toBeUndefined();
+    node.close();
+    void OriginalSimplePool;
+  });
+
   it('discovers an advertised peer by npub', async () => {
     const targetNpub = nip19.npubEncode(getPublicKey(generateSecretKey()));
     const node = createFipsNostrRendezvousNode({

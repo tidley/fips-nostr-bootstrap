@@ -266,9 +266,9 @@ export class FipsNostrRendezvousNode extends EventEmitter {
 
   async start() {
     await ensureWs();
-    this.pool = new SimplePool({
-      automaticallyAuth: () => async (authTemplate) => finalizeEvent(authTemplate, this.sk),
-    });
+    // Keep relay auth opt-in. Some public relays challenge aggressively and may reject
+    // client AUTH attempts in ways that can break startup if we attach a global signer.
+    this.pool = new SimplePool();
 
     await new Promise((resolve, reject) => {
       this.socket.once('error', reject);
