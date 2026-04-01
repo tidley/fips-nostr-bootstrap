@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FIPS Nostr Bootstrap</title>
+  <meta http-equiv="refresh" content="0; url=./video-chat/" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --panel: #121a23;
+      --text: #e7edf3;
+      --muted: #8da0b3;
+      --accent: #4ba3ff;
+      --border: #233244;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at top, rgba(75, 163, 255, 0.18), transparent 35%),
+        linear-gradient(180deg, #0a0f14 0%, var(--bg) 100%);
+      color: var(--text);
+      font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    main {
+      width: min(42rem, calc(100vw - 2rem));
+      padding: 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--panel) 92%, black);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 1.1rem;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    a {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Redirecting to the FIPS video chat demo…</h1>
+    <p>
+      If the redirect does not happen automatically,
+      <a href="./video-chat/">open the demo here</a>.
+    </p>
+  </main>
+</body>
+</html>

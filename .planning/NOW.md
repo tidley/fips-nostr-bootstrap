@@ -1,14 +1,14 @@
 # NOW
 
-1. Finish Slice 7 runtime integration:
-   - propagate the new private `offer` / `answer` runtime path through the remaining app and integration-test entry points
-   - remove remaining user-facing assumptions that a target `npub` is required for discovery-first clients
-   - keep the working UDP probe path intact during migration
+1. Continue the Rust functional migration:
+   - keep the server-side runtime in Rust as the default direction from now on
+   - move the dialing/client runtime out of the JS package and into Rust
+   - decide how the `.mjs` UI should talk to Rust locally: spawned daemon vs HTTP bridge
 
 2. Tighten live validation:
    - treat "publish succeeded but DM not observed" as a real relay delivery failure
    - separate relay-delivery checks from server-roundtrip checks more clearly
-   - verify live server roundtrip against both traversal `answer` and legacy `server-info` responders
+   - verify live roundtrip against the new Rust shell server path, not only the JS server path
 
 3. Prepare downstream consumer integration:
    - carry the traversal flow into `ops-dashboard` once edit approval is available

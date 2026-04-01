@@ -1,342 +1,185 @@
 # FIPS Nostr Bootstrap
 
-This repo now contains a working prototype of:
+Prototype workspace for Nostr-signaled NAT traversal and bootstrap toward upstream FIPS integration.
 
-1. **NIP-17 Nostr rendezvous** (bootstrap signalling)
-2. **UDP hole punching** (simultaneous outbound probe window)
-3. **Direct UDP test traffic** after establishment
-4. **Duplex stream simulation** (~10MB each way by default)
-5. **STUN-only WebRTC signaling + diagnostics**
+The repo is intentionally mixed. It contains:
+- a TypeScript package and test suite for rendezvous, adverts, signaling, STUN handling, and UDP punch orchestration
+- runnable Node `.mjs` apps for web/CLI demos
+- a Rust functional runtime that is starting to replace the JS server side
+- a Rust bootstrap client
+- mobile, Android, and browser demo experiments
+- docs, specs, runbooks, and planning material
 
-> Note: this is transport/rendezvous engineering work. It is **not** a FIPS 140 validation claim.
-
----
+In this repo, "FIPS" means alignment with the upstream FIPS transport/bootstrap direction. It is not a FIPS 140 validation claim.
 
 ## Current status
 
-- ✅ NIP-17 DM bootstrap works
-- ✅ NIP-42 relay auth path wired
-- ✅ Hole punching works in tested environment
-- ✅ Duplex 10MB each-way simulation works
-- ✅ Quick latency benchmark runs after punch
-- ✅ STUN probe test (live binding-response) in CI-style local runs
-- ✅ Standalone STUN-lite server for public-IP A/B testing
-- ✅ Call-signaling tag classification aligned for chapar relay debug/inspection
+What works today:
+- public traversal adverts over Nostr
+- advert discovery without pre-known peer identity
+- private NIP-17/NIP-59 signaling
+- STUN-assisted address observation
+- UDP hole punching with binary probe/ack packets
+- a working shell demo over the punched UDP path
+- JS client/UI talking to either the JS runtime or the new Rust shell server
 
-Known caveats:
-- NAT behavior varies; symmetric NAT may still require fallback relay paths
-- relay quality/rate limits affect bootstrap reliability
+What is still incomplete:
+- full upstream FIPS handoff
+- fully Rust-native client/dialer path
+- full live public-relay reliability hardening
+- final transport policy/fallback story for upstream FIPS
 
----
+## Main directories
 
-## Shell commands: exact runbook
+### `src/`
 
-All scripts auto-load `.env` from repo root.
+TypeScript core modules and the main Vitest suite.
 
-### 0) One-time setup (both machines)
+This is where most of the protocol and runtime logic is modeled and tested:
+- traversal adverts
+- offer/answer signaling
+- STUN normalization
+- punch planning
+- relay/test harnesses
+- runtime simulations and integration tests
 
-```bash
-git clone https://github.com/tidley/fips-nostr-bootstrap.git
-cd fips-nostr-bootstrap
-npm install
-```
+### `packages/fips-nostr-rendezvous/`
 
-### 1) Create `.env` (both machines)
+Reusable TS package for the current JS runtime path.
 
-```bash
-cat > .env <<'EOF'
-# Optional fixed identity (recommended for stable npub):
-# NOSTR_NSEC=nsec1...
-# Optional endpoint overrides:
-# FIPS_UDP_PUBLIC_HOST=...
-# FIPS_STUN_URL=stun:fips.tomdwyer.uk:3478
-EOF
-```
+It contains:
+- `src/index.ts` as the package source of truth
+- generated runtime JS used by the `.mjs` apps
+- the current JS rendezvous node implementation
 
-Relay defaults are now embedded in the apps. Override them explicitly with `--relays` if needed.
+See [packages/fips-nostr-rendezvous/README.md](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/README.md).
 
----
+### `apps/`
 
-## Fast transport demo (NIP-17 + hole punch + duplex)
+Runnable Node entry points built on the package:
+- [apps/fips-web-console.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-web-console.mjs)
+- [apps/fips-shell-server.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-shell-server.mjs)
+- [apps/fips-daemon.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-daemon.mjs)
+- [apps/fips-pty-client.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-pty-client.mjs)
+- [apps/fips-pty-server.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-pty-server.mjs)
+- [apps/fips-combo-client.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-combo-client.mjs)
+- [apps/fips-video-chat.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-video-chat.mjs)
 
-### Server (machine A)
+These are useful as demo surfaces and integration targets, not just examples.
 
-```bash
-cd ~/fips-nostr-bootstrap
-node scripts/udp-transport-via-nostr.mjs --mode server --port 9999 --debug
-```
+### `rust/fips-nostr-rendezvous/`
 
-Copy `identity` (`npub...`).
+Rust runtime/protocol crate for the functional migration.
 
-### Client (machine B)
+Current scope:
+- protocol types and packet helpers
+- legacy `hello -> server-info` wire structs
+- `FIPS1` session frame helpers
+- long-running Rust shell server binary
 
-```bash
-cd ~/fips-nostr-bootstrap
-node scripts/udp-transport-via-nostr.mjs --mode client --npub <SERVER_NPUB> --wait 60000 --debug
-```
+See [rust/fips-nostr-rendezvous/README.md](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/README.md).
 
-Success output includes:
-- `rendezvous.endpointDiscovered: true`
-- `punching.established: true`
-- `duplex.localSentBytes/localReceivedBytes` (~10MB each way)
+### `rust/bootstrap-client/`
 
----
+Rust bootstrap client for:
+- sending `fips.rendezvous.hello`
+- receiving `fips.rendezvous.server-info`
+- optional punch probing
+- writing handoff JSON for downstream startup
 
-## Web console mode (SSH-like command/response)
+See [rust/bootstrap-client/README.md](/home/tom/code/fips-nostr-bootstrap/rust/bootstrap-client/README.md).
 
-### Receiver shell server (machine A)
+### `mobile/` and `android/`
 
-```bash
-cd ~/fips-nostr-bootstrap
-node apps/fips-shell-server.mjs --udp-port 9999 --trusted-npubs "<WEB_UI_NPUB>"
-```
+Client packaging experiments:
+- [mobile/flutter_fips_client](/home/tom/code/fips-nostr-bootstrap/mobile/flutter_fips_client)
+- [android/fips-termux-wrapper](/home/tom/code/fips-nostr-bootstrap/android/fips-termux-wrapper)
 
-### Web UI (machine B)
+These are useful context, but they are not yet the center of gravity.
 
-```bash
-cd ~/fips-nostr-bootstrap
-node apps/fips-web-console.mjs --http-port 8787 --udp-port 0
-```
+### `docs/`, `spec/`, `demo/`, `.planning/`
 
-Open `http://127.0.0.1:8787`, paste server npub, connect, then type commands.
+These contain:
+- architecture and protocol docs
+- runbooks and security/operations notes
+- demo scenarios
+- roadmap/status/todo material
 
----
+Useful starting points:
+- [docs/ARCHITECTURE.md](/home/tom/code/fips-nostr-bootstrap/docs/ARCHITECTURE.md)
+- [docs/FIPS-PARITY.md](/home/tom/code/fips-nostr-bootstrap/docs/FIPS-PARITY.md)
+- [docs/PROTOCOLS.md](/home/tom/code/fips-nostr-bootstrap/docs/PROTOCOLS.md)
+- [docs/PRODUCTION-RUNBOOK.md](/home/tom/code/fips-nostr-bootstrap/docs/PRODUCTION-RUNBOOK.md)
 
-## Terminal-native mode (recommended for htop/nano)
+### `tools/stun-lite/`
 
-### PTY server (machine A)
+Small Go STUN server for local binding tests and diagnostics.
 
-```bash
-cd ~/fips-nostr-bootstrap
-node apps/fips-pty-server.mjs --udp-port 9999 --trusted-npubs "<CLIENT_NPUB>"
-```
+## Quick start
 
-### PTY client (machine B)
-
-```bash
-cd ~/fips-nostr-bootstrap
-node apps/fips-pty-client.mjs --npub <SERVER_NPUB> --wait 60000
-```
-
-Exit PTY client with `Ctrl-]`.
-
-
----
-
-## Useful flags
-
-```bash
---rounds 10                     # ping rounds (default 10)
---timeout 3000                  # ping timeout per probe
---retry-ms 5000                 # DM resend interval
---punch-interval-ms 300         # punch send cadence
---punch-duration-ms 30000       # punch window length
---punch-start-delay-ms 3000     # coordinated start delay
---duplex-bytes 10485760         # per-direction stream size (10MB)
---duplex-chunk-bytes 1200       # UDP payload chunk
---duplex-interval-ms 0           # stream pacing
---duplex-timeout-ms 90000       # wait for remote stream completion
---show-endpoints                # print endpoint addresses in output
---debug                         # verbose logs
-```
-
----
-
-## Standalone library
-
-A standalone package scaffold now exists at:
-
-`packages/fips-nostr-rendezvous`
-
-Package name:
-
-`@fips/nostr-rendezvous`
-
-This is the reusable library layer for trusted-npub rendezvous + punch establishment, so you can hand off the connected UDP socket/remote tuple to higher-level protocols (shell, file transfer, media).
-
----
-
-## Tiny standalone STUN server (binding-only)
-
-For A/B testing outside chapar, a minimal standalone STUN server is included at:
-
-- `tools/stun-lite/main.go`
-
-Run on a public host:
-
-```bash
-cd tools/stun-lite
-go mod tidy
-go run .            # listens on :3478 by default
-# or: STUN_ADDR=":3478" go run .
-```
-
-This server only handles STUN Binding Requests and replies with XOR-MAPPED-ADDRESS.
-
-Operational notes:
-- Intended for public-IP deployment (e.g., Vultr) for STUN-only testing.
-- Keep `3478/udp` open.
-- Prefer systemd for always-on operation.
-
-## Simple web video chat demo (static / GitHub Pages friendly)
-
-A lightweight browser-to-browser video call demo is included as a static page:
-
-- `docs/video-chat/index.html`
-
-Run locally with any static file server:
-
-```bash
-cd docs/video-chat
-python3 -m http.server 8088
-# then open http://127.0.0.1:8088
-```
-
-Open the page on both devices (same URL). Each browser tab creates an **ephemeral npub**, listens on relays for NIP-17 messages, and shows a QR.
-
-Flow:
-1. Receiver opens page and waits (already listening).
-2. Initiator scans/pastes receiver npub and clicks **Send Request**.
-3. Receiver sees incoming request and clicks **Accept**.
-4. Camera and mic start OFF by default.
-5. Enable camera/mic with controls as needed.
-6. One side clicks **Join call**.
-6. Same button toggles to **End call** to tear down the peer connection.
-
-Notes:
-- No auto-join on incoming offer; receiver must click **Join call**.
-
-Identity notes:
-- Default is ephemeral npub per browser tab.
-- You can optionally switch to a user-provided `nsec` via the UI (`Use nsec`).
-- `nsec` is stored in sessionStorage for that browser session.
-
-Relay config notes (client-side):
-- Default relay list is embedded in `docs/video-chat/index.html`.
-- Override relays with querystring: `?relays=wss://relay1,wss://relay2`
-- Or set `window.FIPS_VIDEO_RELAYS = ['wss://relay1', 'wss://relay2']` before app init.
-
-ICE notes:
-- Static page uses multiple STUN fallbacks by default and stays TURN-free unless you supply one.
-- You can override with `window.FIPS_VIDEO_ICE_SERVERS = [{ urls:'stun:...' }]`.
-- To improve success behind restrictive NATs, provide a TURN-capable ICE server list via `window.FIPS_VIDEO_ICE_SERVERS`.
-
-QR notes:
-- QR image is generated client-side.
-- Scanning uses native `BarcodeDetector` when available.
-- Falls back to in-browser `jsQR` for broader support.
-
-Notes:
-- Video signaling now uses DM-like kind `1059` events over relays (no local ws signaling path).
-- Signaling events keep JSON payload compatibility and also include cleartext call-signaling tags (`session`, `stun`, `webrtc`, `candidate`, `ufrag`, `mid`, `mline`) and `#t` tags for relay-side PoC inspection/classification.
-- Uses WebRTC ICE traversal with env-configurable STUN/ICE servers (default list includes `stun:45.77.228.152:3478` plus public STUN fallbacks).
-- Set `FIPS_STUN_URL=stun:<host>:<port>` to change the primary STUN endpoint, or `FIPS_VIDEO_ICE_SERVERS` in the browser to supply a full ICE server list.
-- Includes mic mute/unmute, speaker mute/unmute, and End call (with rejoin support).
-- Join flow now auto-acquires local media when possible before sending offer/answer.
-- If media permission is denied, UI explicitly reports joined receive-only mode.
-- Remote ICE candidates are queued until remote description is set (avoids `InvalidStateError` race).
-- Dark UI with stats at page bottom: RTT, sent/received MB, throughput, ICE candidates, IPv6 hints.
-- Added deeper browser diagnostics for ICE gather lifecycle, transceivers/senders, and SDP direction snapshots.
-- FIPS-style routing hints: candidate-set + bloom exchange, local/LAN-first preference, delayed broader candidate release, selected-path reason logging.
-- Local preview is smaller; remote video is larger.
-- Remote video now adapts to sender aspect ratio (e.g., laptop landscape on phone receivers).
-- Prototype quality: no auth hardening/recording yet.
-
-## Planned integration with `jmcorgan/fips`
-
-This repo is converging on a clean split:
-
-- **NIP-17 + STUN bootstrap plane (this repo)**
-- **FIPS secure session/data plane (`jmcorgan/fips`)**
-
-Planned handoff model:
-1. NIP-17 DM request/accept and session negotiation.
-2. Candidate exchange and direct path establishment.
-3. Bootstrap transcript finalization (session id, peer keys, selected path metadata).
-4. Handoff into `fips` runtime as the transport/session engine.
-
-Near-term deliverables:
-- bootstrap transcript schema for adapter consumption
-- minimal `nostr-bootstrap` adapter interface suitable for `fips`
-- integration tests for replay/expiry and successful bootstrap->session handoff
-
-## SSH-like demos
-
-### A) Web console (single-pane, Terminator-like)
-
-- `apps/fips-shell-server.mjs` (receiver/command executor)
-- `apps/fips-web-console.mjs` (browser UI sender)
-
-Receiver (machine B):
-
-```bash
-node apps/fips-shell-server.mjs --udp-port 9999 --trusted-npubs "<WEB_UI_NPUB>"
-```
-
-Sender UI (machine A):
-
-```bash
-node apps/fips-web-console.mjs --http-port 8787 --udp-port 0
-```
-
-Open `http://127.0.0.1:8787`, paste server npub, connect.
-
-### B) Real terminal client (supports TUI apps like htop)
-
-- `apps/fips-pty-server.mjs` (server-side PTY)
-- `apps/fips-pty-client.mjs` (local terminal client)
-
-### C) Android wrapper app (Termux launcher)
-
-- `android/fips-termux-wrapper`
-- Small native UI that launches the Termux Node client (`apps/fips-pty-client.mjs`) with entered npub.
-
-Server (machine B):
-
-```bash
-node apps/fips-pty-server.mjs --udp-port 9999 --trusted-npubs "<CLIENT_NPUB>"
-```
-
-Client (machine A):
-
-```bash
-node apps/fips-pty-client.mjs --npub <SERVER_NPUB> --wait 60000
-```
-
-Notes:
-- Press `Ctrl-]` to exit client locally.
-- This path allocates a PTY (via `script`) so interactive apps (`htop`, `nano`, etc.) render properly.
-
-Security notes:
-- Prototype remote shell channel, **not full SSH protocol** yet.
-- Keep trusted npub allowlist strict.
-- Run with low-privilege user in testing.
-
----
-
-## Daemon entrypoint (role-based)
-
-Use the unified daemon to start services by runtime role:
-
-```bash
-npm run daemon -- --role fips --fips-udp-port 9999 --relays wss://nos.lol
-npm run daemon -- --role relay --relays wss://nos.lol,wss://relay.damus.io
-npm run daemon -- --role stun --stun-port 3478
-npm run daemon -- --role all --fips-udp-port 9999 --relays wss://nos.lol --stun-port 3478
-```
-
-Notes:
-- `fips`/`relay` currently share the rendezvous node implementation (`packages/fips-nostr-rendezvous`).
-- `stun` role supervises `tools/stun-lite` via `go run main.go` by default.
-- Port preflight checks are enabled by default (UDP bind checks for required role ports).
-- Disable preflight checks only when needed: `--no-check-ports`.
-- On port check failures, daemon prints troubleshooting commands (`ss`, `lsof`, `ufw`, `nft`).
-- Override STUN process command with `--stun-cmd`, `--stun-args`, `--stun-cwd` (or `STUN_CMD`, `STUN_ARGS`, `STUN_CWD`).
-
-## Dev
+Install and run the TS/JS side:
 
 ```bash
 npm install
 npm run build
 npm test
 ```
+
+Useful Node entry points:
+
+```bash
+node apps/fips-web-console.mjs
+node apps/fips-shell-server.mjs
+node apps/fips-daemon.mjs
+node scripts/demo.mjs happy
+```
+
+Build and test the Rust runtime crate:
+
+```bash
+cd rust/fips-nostr-rendezvous
+cargo test
+```
+
+Run the Rust shell server:
+
+```bash
+cd rust/fips-nostr-rendezvous
+cargo run --bin fips-shell-server -- --nsec "$NOSTR_NSEC" --udp-port 9999
+```
+
+Build and test the Rust bootstrap client:
+
+```bash
+cd rust/bootstrap-client
+cargo test
+```
+
+## Recommended mental model
+
+Treat this repo as a bootstrap/traversal lab, not a single polished product.
+
+The practical split right now is:
+- TS/JS still provides most of the client/UI/test harness surface
+- Rust now has the first real long-running functional server path
+- both coexist while the functional side is migrated toward Rust
+
+## Verification
+
+The repo currently uses:
+- `vitest` for TypeScript/unit/integration coverage
+- embedded relay integration tests for JS and JS/Rust interop
+- `cargo test` for the Rust crates
+
+Notable current interop proof:
+- the Rust shell server can publish adverts, receive gift-wrapped DMs, establish a punched session, and serve shell commands to the current JS client runtime
+
+## Bottom line
+
+This repository contains real working traversal/bootstrap code, but it is still a convergence workspace.
+
+If you want the shortest description:
+- Nostr for discovery/signaling
+- STUN for endpoint observation
+- UDP punch for direct path establishment
+- eventual FIPS transport integration as the target end state

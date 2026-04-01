@@ -1,9 +1,9 @@
+// @ts-nocheck
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SimplePool, generateSecretKey, getPublicKey } from 'nostr-tools';
 import { useWebSocketImplementation } from 'nostr-tools/relay';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
 import { startEmbeddedRelay } from './embedded_relay.js';
-// @ts-expect-error local JS package without type declarations
 import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
 import { isServerInfoMessage } from './rendezvous_nip17.js';
 

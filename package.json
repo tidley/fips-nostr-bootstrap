@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p packages/fips-nostr-rendezvous/tsconfig.json",
     "daemon": "npm run build && node apps/fips-daemon.mjs",
     "client:combo": "node apps/fips-combo-client.mjs",
     "test": "vitest run",

@@ -4,6 +4,10 @@
   "type": "module",
   "description": "Nostr (NIP-17) rendezvous + UDP hole punching for FIPS transport handoff",
   "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
   "exports": {
     ".": "./src/index.js"
   },

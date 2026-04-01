@@ -1,5 +1,6 @@
+// @ts-nocheck
 import { describe, expect, it } from 'vitest';
-import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { wrapEvent } from 'nostr-tools/nip17';
 
 // @ts-ignore local JS package without type declarations
@@ -82,6 +83,15 @@ describe('advertised rendezvous runtime', () => {
     expect(node.advertRelays).toEqual(DEFAULT_ADVERT_RELAYS);
     expect(node.dmRelays).toEqual(DEFAULT_DM_RELAYS);
     expect(node.relays).toEqual(DEFAULT_RELAYS);
+  });
+
+  it('treats an explicit publicHost override as sufficient and skips default STUN servers unless explicitly configured', () => {
+    const node = createFipsNostrRendezvousNode({
+      publicHost: '127.0.0.1',
+      advertise: false,
+    });
+
+    expect(node.stunServers).toEqual([]);
   });
 
   it('does not attach a global automatic relay auth hook on startup', async () => {
@@ -463,10 +473,13 @@ describe('advertised rendezvous runtime', () => {
     node._publishDM = (_recipientPubkey: string, obj: Record<string, unknown>) => {
       published.push(obj);
     };
+    node._refreshTraversalObservation = async () => null;
+    node.findRecipientInboxRelays = async () => node.dmRelays;
     node._startPunch = () => {};
     node.waitForPunch = async () => ({ established: true, remote: { host: '203.0.113.20', port: 49000 } });
 
     const connectPromise = node.connect(targetNpub, { waitMs: 2_000, retryMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(published.length).toBeGreaterThanOrEqual(1);
     const publishedOffer = published.find((msg) => msg.type === 'offer') as TraversalOfferLike | undefined;
@@ -536,10 +549,13 @@ describe('advertised rendezvous runtime', () => {
     node._publishDM = (_recipientPubkey: string, obj: Record<string, unknown>) => {
       published.push(obj);
     };
+    node._refreshTraversalObservation = async () => null;
+    node.findRecipientInboxRelays = async () => node.dmRelays;
     node._startPunch = () => {};
     node.waitForPunch = async () => ({ established: true, remote: { host: '203.0.113.40', port: 49001 } });
 
     const connectPromise = node.connect(targetNpub, { waitMs: 2_000, retryMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const publishedOffer = published.find((msg) => msg.type === 'offer') as TraversalOfferLike | undefined;
     expect(publishedOffer).toBeDefined();
@@ -603,10 +619,13 @@ describe('advertised rendezvous runtime', () => {
     node._publishDM = (_recipientPubkey: string, obj: Record<string, unknown>) => {
       published.push(obj);
     };
+    node._refreshTraversalObservation = async () => null;
+    node.findRecipientInboxRelays = async () => node.dmRelays;
     node._startPunch = () => {};
     node.waitForPunch = async () => ({ established: true, remote: { host: '203.0.113.30', port: 9999 } });
 
     const connectPromise = node.connect(targetNpub, { waitMs: 2_000, retryMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(published.some((msg) => msg.type === 'offer')).toBe(true);
     const hello = published.find((msg) => msg.type === 'fips.rendezvous.hello') as LegacyHelloLike | undefined;
@@ -752,5 +771,166 @@ describe('advertised rendezvous runtime', () => {
       port: 9999,
     });
 
+  });
+
+  it('publishes a NIP-17 inbox relay list event with relay tags', () => {
+    const published: Array<{ relays: string[]; event: { kind: number; tags: string[][]; content: string } }> = [];
+    const node = createFipsNostrRendezvousNode({
+      advertRelays: ['wss://offchain.pub'],
+      dmRelays: ['wss://nip17.com', 'wss://relay.nostr.band'],
+      advertise: false,
+    });
+
+    node.pool = {
+      publish(relays: string[], event: { kind: number; tags: string[][]; content: string }) {
+        published.push({ relays, event });
+        return relays.map(() => Promise.resolve(true));
+      },
+    };
+
+    node._publishInboxRelayList();
+
+    expect(published).toHaveLength(1);
+    expect(published[0].event.kind).toBe(10050);
+    expect(published[0].event.tags).toEqual([
+      ['relay', 'wss://nip17.com'],
+      ['relay', 'wss://relay.nostr.band'],
+    ]);
+    expect(published[0].event.content).toBe('');
+  });
+
+  it('looks up recipient inbox relays from kind 10050 events before falling back to defaults', async () => {
+    const targetSk = generateSecretKey();
+    const targetPubkey = getPublicKey(targetSk);
+    const targetNpub = nip19.npubEncode(targetPubkey);
+    const node = createFipsNostrRendezvousNode({
+      dmRelays: ['wss://fallback.example'],
+      inboxLookupRelays: ['wss://lookup.example'],
+      advertise: false,
+    });
+
+    node.pool = {
+      subscribeMany(_relays: string[], filter: Record<string, unknown>, handlers: { onevent: (evt: unknown) => void; oneose?: () => void }) {
+        expect(_relays).toEqual(['wss://lookup.example']);
+        expect(filter.authors).toEqual([targetPubkey]);
+        handlers.onevent(
+          finalizeEvent({
+            kind: 10050,
+            created_at: 1_700_000_000,
+            tags: [
+              ['relay', 'wss://nip17.com'],
+              ['relay', 'wss://www.nostr.ltd'],
+            ],
+            content: '',
+          }, targetSk),
+        );
+        handlers.oneose?.();
+        return { close() {} };
+      },
+    };
+
+    await expect(node.findRecipientInboxRelays(targetNpub, { waitMs: 250 })).resolves.toEqual([
+      'wss://nip17.com',
+      'wss://www.nostr.ltd',
+    ]);
+  });
+
+  it('prefers discovered kind 10050 inbox relays when publishing offer messages', async () => {
+    const targetSk = generateSecretKey();
+    const targetPubkey = getPublicKey(targetSk);
+    const targetNpub = nip19.npubEncode(targetPubkey);
+    const publishedRelaySets: string[][] = [];
+
+    const node = createFipsNostrRendezvousNode({
+      dmRelays: ['wss://fallback.example'],
+      inboxLookupRelays: ['wss://lookup.example'],
+      publicHost: '198.51.100.10',
+      advertise: false,
+      stunServers: [],
+    });
+
+    node.socket = {
+      address() {
+        return { port: 40123 };
+      },
+      on() {},
+      off() {},
+      send() {},
+    };
+
+    node.sub = { close() {} };
+    node.pool = {
+      subscribeMany(_relays: string[], filter: Record<string, unknown>, handlers: { onevent?: (evt: unknown) => void; oneose?: () => void }) {
+        const kinds = Array.isArray(filter.kinds) ? filter.kinds : [];
+        if (kinds[0] === 10050) {
+          handlers.onevent?.(
+            finalizeEvent({
+              kind: 10050,
+              created_at: 1_700_000_000,
+              tags: [['relay', 'wss://nip17.com']],
+              content: '',
+            }, targetSk),
+          );
+          handlers.oneose?.();
+        }
+        return { close() {} };
+      },
+    };
+    node._publishDM = (_recipientPubkey: string, obj: Record<string, unknown>, logContext: { relays?: string[] } = {}) => {
+      publishedRelaySets.push(logContext.relays || node.dmRelays);
+      if (obj.type === 'offer') {
+        setTimeout(() => {
+          node._resolvePendingTraversalResponse({
+            app: 'fips.nat.traversal.v1',
+            eventKind: 21059,
+            type: 'answer',
+            sessionId: obj.sessionId,
+            issuedAt: Number(obj.issuedAt) + 100,
+            expiresAt: Number(obj.expiresAt),
+            nonce: 'answer-nonce-1',
+            senderNpub: targetNpub,
+            recipientNpub: node.getNpub(),
+            inReplyTo: obj.nonce,
+            accepted: true,
+            reflexiveAddress: { protocol: 'udp', ip: '203.0.113.20', port: 49000 },
+            localAddresses: [{ protocol: 'udp', ip: '192.168.1.20', port: 49000 }],
+            punch: { startAtMs: Number(obj.issuedAt) + 500, intervalMs: 300, durationMs: 30000 },
+          }, targetPubkey);
+        }, 0);
+      }
+    };
+    node._startPunch = () => {};
+    node.waitForPunch = async () => ({ established: true, remote: { host: '203.0.113.20', port: 49000 } });
+
+    await node.connect(targetNpub, { waitMs: 2_000, retryMs: 50, inboxWaitMs: 250 });
+
+    expect(publishedRelaySets.length).toBeGreaterThan(0);
+    expect(publishedRelaySets.every((relays) => relays.length === 1)).toBe(true);
+    expect(publishedRelaySets.every((relays) => relays[0] === 'wss://nip17.com')).toBe(true);
+  });
+
+  it('adds NIP-40 expiration metadata to traversal adverts', () => {
+    const published: Array<{ event: { tags: string[][] } }> = [];
+    const node = createFipsNostrRendezvousNode({
+      advertRelays: ['wss://offchain.pub'],
+      advertise: false,
+    });
+
+    node.pool = {
+      publish(_relays: string[], event: { tags: string[][] }) {
+        published.push({ event });
+        return [Promise.resolve(true)];
+      },
+    };
+    node.socket = {
+      address() {
+        return { port: 9999 };
+      },
+    };
+
+    node._publishAdvert();
+
+    expect(published).toHaveLength(1);
+    expect(published[0].event.tags.some((tag) => tag[0] === 'expiration')).toBe(true);
   });
 });
