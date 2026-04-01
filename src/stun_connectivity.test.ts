@@ -2,16 +2,7 @@ import { createSocket } from 'node:dgram';
 import { randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { describe, expect, test } from 'vitest';
-
-function parseStunUrl(input: string): { host: string; port: number } {
-  const raw = input.replace(/^stun:/, '');
-  const idx = raw.lastIndexOf(':');
-  if (idx <= 0) throw new Error(`invalid STUN url: ${input}`);
-  const host = raw.slice(0, idx);
-  const port = Number(raw.slice(idx + 1));
-  if (!host || !Number.isFinite(port)) throw new Error(`invalid STUN url: ${input}`);
-  return { host, port };
-}
+import { DEFAULT_STUN_SERVER, parseStunUrl } from './stun_defaults.js';
 
 function makeBindingRequest(txnId: Buffer): Buffer {
   const msg = Buffer.alloc(20);
@@ -55,7 +46,8 @@ async function probeStun(stunUrl: string, timeoutMs = 3000): Promise<Buffer> {
 }
 
 describe('STUN connectivity', () => {
-  const stunUrl = process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478';
+  const stunUrl = process.env.FIPS_STUN_URL || DEFAULT_STUN_SERVER;
+  const runLiveStunE2E = process.env.RUN_LIVE_STUN_E2E === '1';
 
   test('STUN URL is parseable', () => {
     const parsed = parseStunUrl(stunUrl);
@@ -63,7 +55,8 @@ describe('STUN connectivity', () => {
     expect(parsed.port).toBeGreaterThan(0);
   });
 
-  test('can reach configured STUN server and receive Binding Success', async () => {
+  const liveTest = runLiveStunE2E ? test : test.skip;
+  liveTest('can reach configured STUN server and receive Binding Success', async () => {
     const response = await probeStun(stunUrl, 4000);
 
     expect(response.length).toBeGreaterThanOrEqual(20);

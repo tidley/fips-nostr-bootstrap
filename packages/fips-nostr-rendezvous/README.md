@@ -16,20 +16,24 @@ npm i @fips/nostr-rendezvous
 import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
 
 const server = createFipsNostrRendezvousNode({
-  relays: ['wss://nos.lol'],
+  relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk'],
   trustedNpubs: [], // optional allowlist
   udpPort: 9999,
 });
 
 await server.start();
 console.log('server npub:', server.getNpub());
+// server now publishes a public traversal advert by default
 
 // On another machine/process:
-const client = createFipsNostrRendezvousNode({ relays: ['wss://nos.lol'], udpPort: 0 });
+const client = createFipsNostrRendezvousNode({ relays: ['wss://nos.lol', 'wss://nip17.com', 'wss://nip17.tomdwyer.uk'], udpPort: 0 });
 await client.start();
-const session = await client.connect('<SERVER_NPUB>');
+const peers = await client.listAdvertisedPeers({ waitMs: 5000 });
+const session = await client.connectToDiscoveredPeer({ discoveryWaitMs: 5000, waitMs: 30000 });
 console.log(session);
 ```
+
+If you already know the target identity, `connectToAdvertisedPeer('<SERVER_NPUB>')` is still supported.
 
 `session` includes:
 - `established` state
@@ -65,6 +69,7 @@ Incoming rendezvous requests from unknown npubs are rejected (`reject` event).
 ## Current scope
 
 - NIP-17 DM rendezvous
+- public availability advert publication/discovery
 - optional NIP-42 relay auth (via nostr-tools)
 - simultaneous UDP punch probes
 - allowlist-based trust gate

@@ -129,12 +129,16 @@ Look for JSON startup block with:
 From client/devbox:
 
 ```bash
-FIPS_TEST_RELAYS='wss://fips.tomdwyer.uk' \
+RUN_LIVE_RELAY_E2E=1 \
+RUN_LIVE_RELAY_MATRIX=1 \
+FIPS_TEST_RELAYS='wss://nip17.com,wss://nip17.tomdwyer.uk' \
 FIPS_TEST_SERVER_NPUB='<SERVER_NPUB_FROM_DAEMON_STARTUP_LOG>' \
 npx vitest run src/rendezvous_live_relay.integration.test.ts
 ```
 
-Expected: `2 passed`.
+Expected:
+- per-relay DM delivery smoke tests run against each configured relay
+- live server roundtrip runs against the first configured relay unless overridden
 
 ---
 

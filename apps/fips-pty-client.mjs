@@ -9,13 +9,11 @@ function arg(name, fallback = '') {
 }
 
 const targetNpub = arg('--npub', '');
-if (!targetNpub) {
-  console.error('Usage: node apps/fips-pty-client.mjs --npub <SERVER_NPUB> [--wait 60000]');
-  process.exit(1);
-}
 
 const waitMs = Number(arg('--wait', '60000'));
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
+const discoveryEnabled = !process.argv.includes('--no-discover');
+const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 const node = createFipsNostrRendezvousNode({
   udpPort: 0,
@@ -26,9 +24,26 @@ const node = createFipsNostrRendezvousNode({
 const started = await node.start();
 
 console.error('[local npub]', started.npub);
-console.error('[connecting]', targetNpub);
-const conn = await node.connect(targetNpub, { waitMs });
+if (discoveryEnabled && !targetNpub) {
+  console.error('[discovering any advertised peer]');
+} else if (discoveryEnabled) {
+  console.error('[connecting via advert]', targetNpub);
+} else if (targetNpub) {
+  console.error('[connecting]', targetNpub);
+} else {
+  console.error('Usage: node apps/fips-pty-client.mjs [--npub <SERVER_NPUB>] [--wait 60000] [--no-discover]');
+  process.exit(1);
+}
+
+const conn = discoveryEnabled
+  ? (targetNpub
+      ? await node.connectToAdvertisedPeer(targetNpub, { discoveryWaitMs: waitMs, waitMs })
+      : await node.connectToDiscoveredPeer({ discoveryWaitMs: waitMs, waitMs }))
+  : await node.connect(targetNpub, { waitMs });
 console.error('[connected]', conn.remote);
+if (conn.discoveredAdvert?.publisherNpub) {
+  console.error('[advert source]', conn.discoveredAdvert.publisherNpub);
+}
 
 const session = conn.session;
 session.on('channel:pty_out', (payload) => {

@@ -45,14 +45,14 @@ npm install
 
 ```bash
 cat > .env <<'EOF'
-NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk
+NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk
 # Include modified Chapar relay for PoC signaling classification if needed:
 # NOSTR_RELAYS=wss://nip17.tomdwyer.uk,wss://<your-chapar-relay>
 # Optional fixed identity (recommended for stable npub):
 # NOSTR_NSEC=nsec1...
 # Optional endpoint overrides:
 # FIPS_UDP_PUBLIC_HOST=...
-# FIPS_STUN_URL=stun:45.77.228.152:3478
+# FIPS_STUN_URL=stun:fips.tomdwyer.uk:3478
 EOF
 ```
 

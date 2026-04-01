@@ -2,16 +2,16 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { SimplePool, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 import { useWebSocketImplementation } from 'nostr-tools/relay';
 import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
+import { DEFAULT_DM_RELAYS, parseDmRelayList } from './dm_relays.js';
 import { isHelloMessage, isServerInfoMessage } from './rendezvous_nip17.js';
 import WS from 'ws';
 
+const runLiveRelayE2E = process.env.RUN_LIVE_RELAY_E2E === '1';
+const runRelayMatrix = process.env.RUN_LIVE_RELAY_MATRIX === '1';
 const runLiveServer = process.env.RUN_LIVE_SERVER_ROUNDTRIP !== '0';
-const describeLive = describe;
+const describeLive = runLiveRelayE2E ? describe : describe.skip;
 
-const RELAYS = (process.env.FIPS_TEST_RELAYS || 'wss://nip17.tomdwyer.uk')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const RELAYS = parseDmRelayList(process.env.FIPS_TEST_RELAYS || DEFAULT_DM_RELAYS.join(','));
 
 const SERVER_NPUB = process.env.FIPS_TEST_SERVER_NPUB || 'npub10s7zyycsznn77zknnfe7dtc5xfkl2awn4fv2zkzhh75pgsnxjfksqy2qr5';
 
@@ -81,7 +81,7 @@ describeLive('live rendezvous relay integration (real relay)', () => {
     pool.close(RELAYS);
   });
 
-  it('can deliver and decrypt a hello DM over real relay infrastructure', async () => {
+  const exerciseRelayHelloDelivery = async (relayUrl: string) => {
     const wsMod = await import('ws');
     // @ts-ignore
     useWebSocketImplementation(wsMod.WebSocket || wsMod.default);
@@ -113,7 +113,7 @@ describeLive('live rendezvous relay integration (real relay)', () => {
       }, 12000);
 
       const sub = pool.subscribeMany(
-        RELAYS,
+        [relayUrl],
         { kinds: [1059], '#p': [receiverPubkey], since: Math.floor(Date.now() / 1000) - 60 },
         {
           onevent: (evt) => {
@@ -135,14 +135,23 @@ describeLive('live rendezvous relay integration (real relay)', () => {
       );
     });
 
-    const publishResults = await Promise.allSettled(pool.publish(RELAYS, event));
+    const publishResults = await Promise.allSettled(pool.publish([relayUrl], event));
     const publishOk = publishResults.some((r) => r.status === 'fulfilled');
     expect(publishOk).toBe(true);
 
     const delivered = await gotHello;
     if (!delivered) {
-      console.warn('[live-relay-test] publish succeeded but DM delivery was not observed within timeout');
+      console.warn('[live-relay-test] publish succeeded but DM delivery was not observed within timeout', { relayUrl });
     }
+  };
+
+  it('can deliver and decrypt a hello DM over at least one configured real relay', async () => {
+    await exerciseRelayHelloDelivery(RELAYS[0]);
+  }, 25000);
+
+  const itRelayMatrix = runRelayMatrix ? it : it.skip;
+  itRelayMatrix.each(RELAYS)('relay %s can deliver and decrypt a hello DM', async (relayUrl) => {
+    await exerciseRelayHelloDelivery(relayUrl);
   }, 25000);
 
   const itServer = runLiveServer ? it : it.skip;

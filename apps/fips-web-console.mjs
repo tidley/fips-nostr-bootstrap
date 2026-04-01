@@ -11,7 +11,9 @@ function arg(name, fallback = '') {
 
 const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol').split(',').map((s) => s.trim()).filter(Boolean);
+const discoveryEnabled = !process.argv.includes('--no-discover');
+const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 const node = createFipsNostrRendezvousNode({
   udpPort,
@@ -56,15 +58,18 @@ button{cursor:pointer}
 <div class="panel" style="margin-bottom:10px">
   <div class="meta">Local npub: <code>${started.npub}</code></div>
   <div style="margin-top:8px;display:flex;gap:8px">
-    <input id="npub" placeholder="Target npub" style="flex:1"/>
+    <input id="npub" placeholder="Target npub or leave blank to discover" style="flex:1"/>
+    <button id="discover">Discover</button>
     <button id="connect">Connect</button>
   </div>
+  <div id="peers" class="meta" style="margin-top:8px"></div>
   <div id="status" class="meta" style="margin-top:8px">Status: idle</div>
 </div>
 <textarea id="term" spellcheck="false"></textarea>
 <script>
 const term = document.getElementById('term');
 const statusEl = document.getElementById('status');
+const peersEl = document.getElementById('peers');
 let prompt = 'fips@peer:$ ';
 let cmdInFlight = false;
 let cwd = '~';
@@ -73,7 +78,7 @@ const pending = new Map();
 
 function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
-function init(){ term.value=''; writeLine('Connected UI ready. Paste npub and press Connect.'); setPrompt(); }
+function init(){ term.value=''; writeLine('Connected UI ready. Discover peers or paste an npub and press Connect.'); setPrompt(); }
 init();
 
 function currentLine(){
@@ -172,6 +177,9 @@ document.getElementById('connect').onclick = async () => {
   else writeLine('[connected] ' + d.sessionId);
   setPrompt();
 };
+
+document.getElementById('discover').onclick = refreshPeers;
+refreshPeers().catch(() => {});
 </script>
 </body></html>`;
 
@@ -200,16 +208,37 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const { npub } = JSON.parse(b || '{}');
-        if (!npub) throw new Error('missing npub');
-        const conn = await node.connect(npub, { waitMs: 60000 });
+        const conn = discoveryEnabled
+          ? (npub
+              ? await node.connectToAdvertisedPeer(npub, { discoveryWaitMs: 60000, waitMs: 60000 })
+              : await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 }))
+          : await node.connect(npub, { waitMs: 60000 });
         attachSession(conn.nonce, conn.remote, conn.session);
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, sessionId: conn.nonce, remote: conn.remote }));
+        res.end(JSON.stringify({
+          ok: true,
+          sessionId: conn.nonce,
+          remote: conn.remote,
+          discovered: Boolean(conn.discoveredAdvert),
+          discoveredAdvert: conn.discoveredAdvert || null,
+        }));
       } catch (e) {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
       }
     });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/api/discover') {
+    try {
+      const peers = discoveryEnabled ? await node.listAdvertisedPeers({ waitMs: 1500, maxPeers: 10 }) : [];
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, peers }));
+    } catch (e) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message || e), peers: [] }));
+    }
     return;
   }
 
@@ -264,3 +293,25 @@ process.on('SIGINT', () => {
   node.close();
   process.exit(0);
 });
+async function refreshPeers() {
+  const r = await fetch('/api/discover');
+  const d = await r.json();
+  if (!d.ok) {
+    peersEl.textContent = 'Discovery failed: ' + d.error;
+    return;
+  }
+  if (!d.peers.length) {
+    peersEl.textContent = 'No active traversal adverts found';
+    return;
+  }
+  peersEl.innerHTML = d.peers.map((peer, index) =>
+    '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
+    'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
+    '</button>'
+  ).join('');
+  for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
+    btn.onclick = () => {
+      document.getElementById('npub').value = btn.getAttribute('data-npub');
+    };
+  }
+}
