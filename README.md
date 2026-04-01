@@ -45,9 +45,6 @@ npm install
 
 ```bash
 cat > .env <<'EOF'
-NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social
-# Include modified Chapar relay for PoC signaling classification if needed:
-# NOSTR_RELAYS=wss://nip17.tomdwyer.uk,wss://<your-chapar-relay>
 # Optional fixed identity (recommended for stable npub):
 # NOSTR_NSEC=nsec1...
 # Optional endpoint overrides:
@@ -55,6 +52,8 @@ NOSTR_RELAYS=wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip
 # FIPS_STUN_URL=stun:fips.tomdwyer.uk:3478
 EOF
 ```
+
+Relay defaults are now embedded in the apps. Override them explicitly with `--relays` if needed.
 
 ---
 

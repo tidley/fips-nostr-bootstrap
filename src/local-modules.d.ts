@@ -1,6 +1,8 @@
 declare module '../packages/fips-nostr-rendezvous/src/index.js' {
   import { EventEmitter } from 'node:events';
 
+  export const DEFAULT_RELAYS: string[];
+
   export class FipsNostrRendezvousNode extends EventEmitter {
     pubkey: string;
     npub: string;

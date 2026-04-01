@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import process from 'node:process';
-import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
+import { createFipsNostrRendezvousNode, DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -12,12 +12,12 @@ const targetNpub = arg('--npub', '');
 
 const waitMs = Number(arg('--wait', '60000'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
-  .split(',').map((s) => s.trim()).filter(Boolean);
+const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveRelays = relays.length ? relays : [...DEFAULT_RELAYS];
 
 const node = createFipsNostrRendezvousNode({
   udpPort: 0,
-  relays,
+  relays: effectiveRelays,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
   advertise: false,
@@ -25,6 +25,7 @@ const node = createFipsNostrRendezvousNode({
 const started = await node.start();
 
 console.error('[local npub]', started.npub);
+console.error('[relays]', effectiveRelays.join(','));
 if (discoveryEnabled && !targetNpub) {
   console.error('[discovering any advertised peer]');
 } else if (discoveryEnabled) {

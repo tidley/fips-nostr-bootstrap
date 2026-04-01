@@ -10,6 +10,18 @@ const ADVERT_PROTOCOL = 'fips.nat.traversal.v1';
 const TRAVERSAL_SIGNAL_KIND = 21059;
 const TRAVERSAL_SIGNAL_TTL_MS = 60 * 1000;
 
+export const DEFAULT_RELAYS = [
+  'wss://nos.lol',
+  'wss://relay.damus.io',
+  'wss://relay.primal.net',
+  'wss://nip17.com',
+  'wss://nip17.tomdwyer.uk',
+  'wss://relay.snort.social',
+  'wss://relay.nostr.band',
+  'wss://offchain.pub',
+  'wss://relay.nos.social',
+];
+
 async function ensureWs() {
   if (typeof globalThis.WebSocket !== 'undefined') {
     useWebSocketImplementation(globalThis.WebSocket);
@@ -185,17 +197,7 @@ class FipsStackSession extends EventEmitter {
 export class FipsNostrRendezvousNode extends EventEmitter {
   constructor(opts = {}) {
     super();
-    this.relays = opts.relays ?? [
-      'wss://nos.lol',
-      'wss://relay.damus.io',
-      'wss://relay.primal.net',
-      'wss://nip17.com',
-      'wss://nip17.tomdwyer.uk',
-      'wss://relay.snort.social',
-      'wss://relay.nostr.band',
-      'wss://offchain.pub',
-      'wss://relay.nos.social',
-    ];
+    this.relays = opts.relays ?? DEFAULT_RELAYS;
     this.trustedNpubs = new Set(opts.trustedNpubs ?? []);
     this.publicHost = opts.publicHost;
     this.udpPort = opts.udpPort ?? 9999;

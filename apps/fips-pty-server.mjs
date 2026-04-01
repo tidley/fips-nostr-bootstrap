@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
-import { createFipsNostrRendezvousNode } from '../packages/fips-nostr-rendezvous/src/index.js';
+import { createFipsNostrRendezvousNode, DEFAULT_RELAYS } from '../packages/fips-nostr-rendezvous/src/index.js';
 
 function arg(name, fallback = '') {
   const i = process.argv.indexOf(name);
@@ -10,12 +10,12 @@ function arg(name, fallback = '') {
 
 const udpPort = Number(arg('--udp-port', '9999'));
 const trusted = (arg('--trusted-npubs', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const relays = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk,wss://relay.snort.social,wss://relay.nostr.band,wss://offchain.pub,wss://relay.nos.social')
-  .split(',').map((s) => s.trim()).filter(Boolean);
+const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const effectiveRelays = relays.length ? relays : [...DEFAULT_RELAYS];
 
 const node = createFipsNostrRendezvousNode({
   udpPort,
-  relays,
+  relays: effectiveRelays,
   trustedNpubs: trusted,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
@@ -66,7 +66,8 @@ console.log(JSON.stringify({
   app: 'fips-pty-server',
   npub: started.npub,
   udpPort: started.udpPort,
-  relays,
+  relays: effectiveRelays,
+  relaySource: relays.length ? 'cli' : 'embedded-defaults',
   trustedCount: trusted.length,
 }, null, 2));
 
