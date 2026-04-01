@@ -20,6 +20,7 @@ const node = createFipsNostrRendezvousNode({
   relays,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
+  advertise: false,
 });
 const started = await node.start();
 
@@ -70,8 +71,11 @@ button{cursor:pointer}
 const term = document.getElementById('term');
 const statusEl = document.getElementById('status');
 const peersEl = document.getElementById('peers');
+const connectBtn = document.getElementById('connect');
+const discoverBtn = document.getElementById('discover');
 let prompt = 'fips@peer:$ ';
 let cmdInFlight = false;
+let transportBusy = false;
 let cwd = '~';
 const seen = new Set();
 const pending = new Map();
@@ -79,6 +83,12 @@ const pending = new Map();
 function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
 function init(){ term.value=''; writeLine('Connected UI ready. Discover peers or paste an npub and press Connect.'); setPrompt(); }
+function setTransportBusy(busy, label){
+  transportBusy = busy;
+  connectBtn.disabled = busy;
+  discoverBtn.disabled = busy;
+  statusEl.textContent = label || (busy ? 'Status: working' : 'Status: idle');
+}
 init();
 
 function currentLine(){
@@ -148,6 +158,7 @@ const es = new EventSource('/api/events');
 es.addEventListener('status', ev => {
   const d = JSON.parse(ev.data);
   statusEl.textContent = d.connected ? ('Status: connected ' + d.sessionId + ' -> ' + d.remote.host + ':' + d.remote.port) : 'Status: idle';
+  if (d.connected) setTransportBusy(false);
 });
 
 es.addEventListener('result', ev => {
@@ -170,34 +181,60 @@ es.addEventListener('result', ev => {
 });
 
 async function refreshPeers() {
-  const r = await fetch('/api/discover');
-  const d = await r.json();
-  if (!d.ok) {
-    peersEl.textContent = 'Discovery failed: ' + d.error;
-    return;
-  }
-  if (!d.peers.length) {
-    peersEl.textContent = 'No active traversal adverts found';
-    return;
-  }
-  peersEl.innerHTML = d.peers.map((peer, index) =>
-    '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
-    'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
-    '</button>'
-  ).join('');
-  for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
-    btn.onclick = () => {
-      document.getElementById('npub').value = btn.getAttribute('data-npub');
-    };
+  if (transportBusy) return;
+  try {
+    setTransportBusy(true, 'Status: discovering peers...');
+    writeLine('[discover] querying relay adverts...');
+    const r = await fetch('/api/discover');
+    const d = await r.json();
+    if (!d.ok) {
+      peersEl.textContent = 'Discovery failed: ' + d.error;
+      writeLine('[discover error] ' + d.error);
+      return;
+    }
+    if (!d.peers.length) {
+      peersEl.textContent = 'No active traversal adverts found';
+      writeLine('[discover] no active traversal adverts found');
+      return;
+    }
+    peersEl.innerHTML = d.peers.map((peer, index) =>
+      '<button data-npub="' + peer.publisherNpub + '" style="margin-right:6px;margin-top:6px">' +
+      'Peer ' + (index + 1) + ' ' + peer.publisherNpub.slice(0, 16) + '...' +
+      '</button>'
+    ).join('');
+    for (const btn of peersEl.querySelectorAll('button[data-npub]')) {
+      btn.onclick = () => {
+        document.getElementById('npub').value = btn.getAttribute('data-npub');
+      };
+    }
+    writeLine('[discover] found ' + d.peers.length + ' peer advert(s)');
+  } catch (err) {
+    writeLine('[discover error] ' + String(err.message || err));
+  } finally {
+    if (!active) setTransportBusy(false, 'Status: idle');
+    else setTransportBusy(false, 'Status: connected ' + active.sessionId + ' -> ' + active.remote.host + ':' + active.remote.port);
   }
 }
 
 document.getElementById('connect').onclick = async () => {
+  if (transportBusy) return;
   const npub = document.getElementById('npub').value.trim();
-  const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
-  const d = await r.json();
-  if (!d.ok) writeLine('[connect error] ' + d.error);
-  else writeLine('[connected] ' + d.sessionId);
+  try {
+    setTransportBusy(true, npub ? 'Status: connecting to ' + npub.slice(0, 16) + '...' : 'Status: connecting to discovered peer...');
+    writeLine(npub ? ('[connect] dialing ' + npub) : '[connect] dialing first discovered peer');
+    const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
+    const d = await r.json();
+    if (!d.ok) {
+      writeLine('[connect error] ' + d.error);
+      setTransportBusy(false, 'Status: idle');
+    } else {
+      const source = d.discoveredAdvert?.publisherNpub ? ' via advert ' + d.discoveredAdvert.publisherNpub : '';
+      writeLine('[connected] ' + d.sessionId + source);
+    }
+  } catch (err) {
+    writeLine('[connect error] ' + String(err.message || err));
+    setTransportBusy(false, 'Status: idle');
+  }
   setPrompt();
 };
 
@@ -231,6 +268,7 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const { npub } = JSON.parse(b || '{}');
+        if (npub && npub === started.npub) throw new Error('refusing to connect to self');
         const conn = discoveryEnabled
           ? (npub
               ? await node.connectToAdvertisedPeer(npub, { discoveryWaitMs: 60000, waitMs: 60000 })
@@ -255,7 +293,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/discover') {
     try {
-      const peers = discoveryEnabled ? await node.listAdvertisedPeers({ waitMs: 1500, maxPeers: 10 }) : [];
+      const peers = discoveryEnabled ? await node.listAdvertisedPeers({
+        waitMs: 1500,
+        maxPeers: 10,
+        excludePublisherNpubs: [started.npub],
+      }) : [];
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, peers }));
     } catch (e) {

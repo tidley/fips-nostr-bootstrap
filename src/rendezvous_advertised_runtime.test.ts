@@ -151,6 +151,57 @@ describe('advertised rendezvous runtime', () => {
     expect(adverts[0].publisherNpub).not.toBe(adverts[1].publisherNpub);
   });
 
+  it('can exclude its own npub from advert discovery results', async () => {
+    const node = createFipsNostrRendezvousNode({
+      relays: ['wss://nip17.tomdwyer.uk'],
+      udpPort: 0,
+      advertise: false,
+    });
+    const selfNpub = node.getNpub();
+    const otherNpub = nip19.npubEncode(getPublicKey(generateSecretKey()));
+
+    node.pool = {
+      subscribeMany(_relays: string[], _filter: Record<string, unknown>, handlers: { onevent: (evt: { content: string }) => void }) {
+        setTimeout(() => {
+          handlers.onevent({
+            content: JSON.stringify({
+              app: 'fips.nat.traversal.v1',
+              publisherNpub: selfNpub,
+              expiresAt: Date.now() + 60_000,
+              publishedAt: Date.now(),
+              sequence: 1,
+              relays: ['wss://nip17.tomdwyer.uk'],
+              stunServers: ['stun:fips.tomdwyer.uk:3478'],
+              transports: ['udp'],
+            }),
+          });
+          handlers.onevent({
+            content: JSON.stringify({
+              app: 'fips.nat.traversal.v1',
+              publisherNpub: otherNpub,
+              expiresAt: Date.now() + 60_000,
+              publishedAt: Date.now() + 1,
+              sequence: 2,
+              relays: ['wss://nip17.tomdwyer.uk'],
+              stunServers: ['stun:fips.tomdwyer.uk:3478'],
+              transports: ['udp'],
+            }),
+          });
+        }, 0);
+        return { close() {} };
+      },
+    };
+
+    const adverts = await node.listAdvertisedPeers({
+      waitMs: 250,
+      maxPeers: 10,
+      excludePublisherNpubs: [selfNpub],
+    });
+
+    expect(adverts).toHaveLength(1);
+    expect(adverts[0].publisherNpub).toBe(otherNpub);
+  });
+
   it('connects through discovery before invoking the private bootstrap path', async () => {
     const targetNpub = nip19.npubEncode(getPublicKey(generateSecretKey()));
     const node = createFipsNostrRendezvousNode({
@@ -219,6 +270,54 @@ describe('advertised rendezvous runtime', () => {
 
     expect(conn.discoveredAdvert.publisherNpub).toBe(advertisedNpub);
     expect(conn.targetNpub).toBe(advertisedNpub);
+  });
+
+  it('skips its own advert when dialing an unknown peer', async () => {
+    const node = createFipsNostrRendezvousNode({
+      relays: ['wss://nip17.tomdwyer.uk'],
+      udpPort: 0,
+      advertise: false,
+    });
+    const selfNpub = node.getNpub();
+    const remoteNpub = nip19.npubEncode(getPublicKey(generateSecretKey()));
+
+    node.listAdvertisedPeers = async (opts: { excludePublisherNpubs?: string[] }) => {
+      expect(opts.excludePublisherNpubs).toContain(selfNpub);
+      return [
+        {
+          app: 'fips.nat.traversal.v1',
+          publisherNpub: remoteNpub,
+          relays: ['wss://nip17.tomdwyer.uk'],
+          stunServers: ['stun:fips.tomdwyer.uk:3478'],
+          transports: ['udp'],
+          publishedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        },
+      ];
+    };
+    node.connect = async (resolvedTargetNpub: string) => ({
+      nonce: 'n-1',
+      established: { established: true, remote: { host: '45.77.228.152', port: 9999 } },
+      remote: { host: '45.77.228.152', port: 9999 },
+      socket: {},
+      session: {},
+      targetNpub: resolvedTargetNpub,
+    });
+
+    const conn = await node.connectToDiscoveredPeer({ discoveryWaitMs: 1_000, waitMs: 5_000 });
+
+    expect(conn.discoveredAdvert.publisherNpub).toBe(remoteNpub);
+    expect(conn.targetNpub).toBe(remoteNpub);
+  });
+
+  it('refuses to connect directly to its own npub', async () => {
+    const node = createFipsNostrRendezvousNode({
+      relays: ['wss://nip17.tomdwyer.uk'],
+      udpPort: 0,
+      advertise: false,
+    });
+
+    await expect(node.connect(node.getNpub(), { waitMs: 100 })).rejects.toThrow('refusing to connect to self');
   });
 
   it('publishes an issue-aligned traversal offer before waiting for an answer', async () => {
