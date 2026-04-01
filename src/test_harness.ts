@@ -3,12 +3,21 @@ import { HandshakeMachine } from './handshake.js';
 import { MetricsStore } from './metrics.js';
 import { attemptDirectProbe, type NatType } from './nat_probe.js';
 import { SessionStore } from './session.js';
+import { runTraversalBootstrapScenario } from './traversal_flow.js';
+import type { NostrSignalAdapter } from './signal_nostr.js';
 import type { BootstrapAck, BootstrapAnnounce, ConnectConfirm, EndpointHint, HandshakeState } from './types.js';
+import type { StunBindingObservation } from './traversal_stun.js';
 
 export interface HarnessRun {
   finalState: HandshakeState;
   usedFallback: boolean;
   probes: number;
+}
+
+export interface TraversalHarnessRun extends HarnessRun {
+  advertFound: boolean;
+  answerAccepted: boolean;
+  answerReason?: string;
 }
 
 export function runLocalHandshakeScenario(params: {
@@ -82,4 +91,50 @@ export function runLocalHandshakeScenario(params: {
 
 export function endpoint(host: string, port: number, priority: number): EndpointHint {
   return { host, port, transport: 'udp', priority };
+}
+
+export function runAdvertisedTraversalScenario(params: {
+  adapter: NostrSignalAdapter;
+  now: number;
+  localNpub: string;
+  remoteNpub: string;
+  localNat: NatType;
+  remoteNat: NatType;
+  sessionId: string;
+  offerNonce: string;
+  answerNonce: string;
+  ttlMs: number;
+  localObservation: StunBindingObservation;
+  remoteObservation: StunBindingObservation;
+}): TraversalHarnessRun {
+  const result = runTraversalBootstrapScenario({
+    adapter: params.adapter,
+    nowMs: params.now,
+    localNpub: params.localNpub,
+    remoteNpub: params.remoteNpub,
+    localNat: params.localNat,
+    remoteNat: params.remoteNat,
+    sessionId: params.sessionId,
+    offerNonce: params.offerNonce,
+    answerNonce: params.answerNonce,
+    ttlMs: params.ttlMs,
+    localObservation: params.localObservation,
+    remoteObservation: params.remoteObservation,
+    localLeadMs: 2_000,
+    remoteLeadMs: 3_000,
+    localIntervalMs: 250,
+    remoteIntervalMs: 300,
+    localDurationMs: 20_000,
+    remoteDurationMs: 30_000,
+    maxAttempts: 5,
+  });
+
+  return {
+    finalState: result.directEstablished ? 'direct_established' : 'fallback_established',
+    usedFallback: result.usedFallback,
+    probes: result.schedule.length,
+    advertFound: result.advertFound,
+    answerAccepted: result.answerAccepted,
+    answerReason: result.answerReason,
+  };
 }

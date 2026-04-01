@@ -1,0 +1,29 @@
+# Minimal upstream jmcorgan/fips config for integrated live bootstrap.
+#
+# Purpose:
+# - provides at least one operational UDP transport so
+#   `fips --bootstrap-relay ... --bootstrap-server-npub ...`
+#   can inject a peer and immediately attempt data-plane connect.
+#
+# Safe defaults here disable TUN/DNS so you can run without extra host networking setup.
+
+node:
+  identity:
+    persistent: true
+    # optional explicit key:
+    # nsec: "nsec1..."
+
+# Keep off for minimal bootstrap/connect validation.
+tun:
+  enabled: false
+
+dns:
+  enabled: false
+
+transports:
+  udp:
+    # local UDP listener for this node (choose any free UDP port)
+    bind_addr: "0.0.0.0:2121"
+
+# No static peers needed: bootstrap flags inject/update peer at startup.
+peers: []

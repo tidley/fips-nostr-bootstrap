@@ -1,0 +1,286 @@
+#!/usr/bin/env node
+import 'dotenv/config';
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { wrapEvent, unwrapEvent } from 'nostr-tools/nip17';
+import WS from 'ws';
+import dgram from 'node:dgram';
+
+function arg(name, fallback = '') {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : fallback;
+}
+
+function hasFlag(name) {
+  return process.argv.includes(name);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function usage() {
+  console.log(`
+FIPS combo client (Nostr transport -> STUN/FIPS bootstrap data)
+
+Usage:
+  node apps/fips-combo-client.mjs --relay wss://fips.tomdwyer.uk --server-npub <npub...>
+
+Options:
+  --relay <url>            Relay websocket URL (default: $FIPS_CLIENT_RELAY or wss://fips.tomdwyer.uk)
+  --server-npub <npub>     Target server npub (required)
+  --session-id <id>        Optional session id override
+  --timeout-ms <ms>        Wait timeout (default: 30000)
+  --mode <bootstrap|connect>  Run bootstrap only or continue into UDP punch connect (default: bootstrap)
+  --nsec <nsec>            Optional client nsec (default: ephemeral)
+  --want-fips <0|1>        Include fips connect request (default: 1)
+  --want-stun <0|1>        Include stun info request (default: 1)
+  --help                   Show this help
+
+Env fallbacks:
+  FIPS_CLIENT_RELAY
+  FIPS_SERVER_NPUB
+  FIPS_CLIENT_NSEC
+`);
+}
+
+if (hasFlag('--help') || hasFlag('-h')) {
+  usage();
+  process.exit(0);
+}
+
+const relay = arg('--relay', process.env.FIPS_CLIENT_RELAY || 'wss://fips.tomdwyer.uk');
+const serverNpub = arg('--server-npub', process.env.FIPS_SERVER_NPUB || '');
+const timeoutMs = Number(arg('--timeout-ms', '30000'));
+const mode = arg('--mode', 'bootstrap');
+const wantFips = arg('--want-fips', '1') !== '0';
+const wantStun = arg('--want-stun', '1') !== '0';
+
+if (!['bootstrap', 'connect'].includes(mode)) {
+  console.error('[combo-client] --mode must be bootstrap or connect');
+  process.exit(1);
+}
+
+if (!serverNpub) {
+  console.error('[combo-client] missing --server-npub (or FIPS_SERVER_NPUB)');
+  usage();
+  process.exit(1);
+}
+
+const target = nip19.decode(serverNpub);
+if (target.type !== 'npub') {
+  console.error('[combo-client] --server-npub must be npub');
+  process.exit(1);
+}
+const serverPubkey = target.data;
+
+const nsecInput = arg('--nsec', process.env.FIPS_CLIENT_NSEC || '');
+let sk;
+let resolvedNsec;
+if (nsecInput) {
+  const d = nip19.decode(nsecInput);
+  if (d.type !== 'nsec') {
+    console.error('[combo-client] provided nsec is invalid');
+    process.exit(1);
+  }
+  sk = d.data;
+  resolvedNsec = nsecInput;
+} else {
+  sk = generateSecretKey();
+  resolvedNsec = nip19.nsecEncode(sk);
+}
+
+const pubkey = getPublicKey(sk);
+const npub = nip19.npubEncode(pubkey);
+
+const sessionId = arg('--session-id', `combo-${Date.now()}`);
+const nonce = `n-${Math.random().toString(16).slice(2)}`;
+
+let connectSocket = null;
+let localUdpPort = 9;
+if (mode === 'connect') {
+  connectSocket = dgram.createSocket('udp4');
+  await new Promise((resolve, reject) => {
+    connectSocket.once('error', reject);
+    connectSocket.bind(0, '0.0.0.0', resolve);
+  });
+  localUdpPort = connectSocket.address().port;
+}
+
+const helloPayload = {
+  type: 'fips.rendezvous.hello',
+  version: '1.0',
+  sessionId,
+  nonce,
+  issuedAt: Date.now(),
+  wants: { stunInfo: wantStun, fipsConnect: wantFips || mode === 'connect' },
+  capabilities: ['combo-client-v1'],
+  clientEndpoint: { host: '0.0.0.0', port: localUdpPort },
+};
+
+console.log(JSON.stringify({
+  app: 'fips-combo-client',
+  relay,
+  mode,
+  client: { npub, ephemeral: !nsecInput, nsec: resolvedNsec },
+  target: { npub: serverNpub },
+  request: helloPayload,
+}, null, 2));
+
+const event = wrapEvent(sk, { publicKey: serverPubkey }, JSON.stringify(helloPayload));
+
+const result = await new Promise((resolve, reject) => {
+  const ws = new WS(relay);
+  const subId = `combo-sub-${Math.random().toString(16).slice(2)}`;
+
+  const timeout = setTimeout(() => {
+    try { ws.close(); } catch {}
+    reject(new Error('timed out waiting for server-info'));
+  }, timeoutMs);
+
+  ws.on('open', () => {
+    ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], since: Math.floor(Date.now() / 1000) - 120 }]));
+    ws.send(JSON.stringify(['EVENT', event]));
+  });
+
+  ws.on('message', (raw) => {
+    try {
+      const arr = JSON.parse(String(raw));
+      if (!Array.isArray(arr) || arr.length < 2) return;
+
+      if (arr[0] === 'OK') {
+        const ok = Boolean(arr[2]);
+        if (!ok) {
+          clearTimeout(timeout);
+          try { ws.close(); } catch {}
+          reject(new Error(`relay rejected event: ${arr[3] || 'unknown'}`));
+        }
+        return;
+      }
+
+      if (arr[0] !== 'EVENT') return;
+      const evt = arr[2];
+      if (!evt) return;
+
+      const rumor = unwrapEvent(evt, sk);
+      const msg = JSON.parse(rumor.content);
+      if (msg?.type !== 'fips.rendezvous.server-info') return;
+      if (msg?.nonce !== nonce || msg?.sessionId !== sessionId) return;
+
+      clearTimeout(timeout);
+      try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {}
+      try { ws.close(); } catch {}
+      resolve({ rumor, msg });
+    } catch {
+      // ignore unrelated/unreadable events
+    }
+  });
+
+  ws.on('error', (err) => {
+    clearTimeout(timeout);
+    reject(err);
+  });
+});
+
+console.log(JSON.stringify({
+  ok: true,
+  response: result.msg,
+}, null, 2));
+
+if (mode === 'connect') {
+  const info = result.msg;
+  const endpoint = info?.endpoint;
+  const punch = info?.punch;
+
+  if (!endpoint?.host || !endpoint?.port || !punch) {
+    console.error('[combo-client] connect mode requires endpoint + punch in server-info');
+    process.exit(2);
+  }
+
+  const socket = connectSocket || dgram.createSocket('udp4');
+  const intervalMs = Number(punch.intervalMs || 300);
+  const durationMs = Number(punch.durationMs || 30000);
+  const startAtMs = Number(punch.startAtMs || Date.now());
+  const waitMs = Math.max(0, startAtMs - Date.now());
+
+  const sessionNonce = info.nonce;
+  let seq = 0;
+  let acked = false;
+  let fipsPong = null;
+
+  const connected = await new Promise((resolve) => {
+    socket.on('message', (msg) => {
+      try {
+        const raw = msg.toString('utf8');
+
+        // Probe acknowledgement path.
+        const pkt = JSON.parse(raw);
+        if (pkt?.t === 'PROBE_ACK' && pkt?.n === sessionNonce) {
+          acked = true;
+          return;
+        }
+
+        // fallthrough for framed FIPS traffic if JSON packet isn't PROBE_ACK
+      } catch {
+        // not plain JSON packet, may be framed FIPS payload
+      }
+
+      try {
+        if (msg.length < 5) return;
+        if (msg.subarray(0, 5).toString() !== 'FIPS1') return;
+        const frame = JSON.parse(msg.subarray(5).toString('utf8'));
+        if (frame?.sessionId !== sessionNonce) return;
+        if (frame?.channel === 'fips_pong') {
+          fipsPong = frame.payload;
+          resolve(true);
+        }
+      } catch {
+        // ignore malformed frame
+      }
+    });
+
+    setTimeout(async () => {
+      const startedAt = Date.now();
+      let sentFipsPing = false;
+
+      while (Date.now() - startedAt < durationMs && !fipsPong) {
+        if (!acked) {
+          const probe = Buffer.from(JSON.stringify({ t: 'PROBE', n: sessionNonce, s: seq++ }));
+          socket.send(probe, endpoint.port, endpoint.host);
+        } else if (!sentFipsPing) {
+          const frame = {
+            sessionId: sessionNonce,
+            type: 'data',
+            channel: 'fips_ping',
+            payload: { clientNpub: npub, at: Date.now(), msg: 'hello-from-combo-client' },
+            at: Date.now(),
+          };
+          const pkt = Buffer.concat([Buffer.from('FIPS1'), Buffer.from(JSON.stringify(frame))]);
+          socket.send(pkt, endpoint.port, endpoint.host);
+          sentFipsPing = true;
+        }
+
+        await sleep(intervalMs);
+      }
+
+      resolve(Boolean(fipsPong));
+    }, waitMs);
+  });
+
+  socket.close();
+
+  console.log(JSON.stringify({
+    connect: {
+      attempted: true,
+      endpoint,
+      punch: { startAtMs, intervalMs, durationMs },
+      probeAckReceived: acked,
+      fipsTrafficRoundtrip: Boolean(fipsPong),
+      fipsPong,
+      note: connected
+        ? 'UDP punch acknowledged and FIPS framed traffic roundtrip succeeded.'
+        : 'No FIPS framed response observed within punch window.',
+    },
+  }, null, 2));
+
+  if (!connected) process.exit(3);
+}

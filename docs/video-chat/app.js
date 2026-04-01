@@ -8,6 +8,7 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
     'wss://nos.lol',
     'wss://relay.damus.io',
     'wss://relay.primal.net',
+    'wss://nip17.com',
     'wss://nip17.tomdwyer.uk',
   ];
 
@@ -19,7 +20,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const RELAYS = (fromGlobal && fromGlobal.length ? fromGlobal : (fromQuery && fromQuery.length ? fromQuery : DEFAULT_RELAYS));
   const APP = 'fips.video.v1';
   const DEFAULT_STUN_URLS = [
-    String(window.FIPS_STUN_URL || 'stun:45.77.228.152:3478'),
+    String(window.FIPS_STUN_URL || 'stun:fips.tomdwyer.uk:3478'),
+    'stun:45.77.228.152:3478',
     'stun:stun.l.google.com:19302',
     'stun:stun1.l.google.com:19302',
     'stun:stun.cloudflare.com:3478',

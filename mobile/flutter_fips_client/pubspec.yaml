@@ -1,0 +1,12 @@
+name: flutter_fips_client
+description: FIPS mobile bootstrap client
+publish_to: 'none'
+version: 0.1.0+1
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_rust_bridge: any
+flutter:
+  uses-material-design: true

@@ -8,7 +8,7 @@ function arg(name, fallback = '') {
 }
 
 const port = Number(arg('--port', '8088'));
-const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.tomdwyer.uk')
+const relayList = (process.env.NOSTR_RELAYS || 'wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nip17.com,wss://nip17.tomdwyer.uk')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 const rawHtml = `<!doctype html>
@@ -162,7 +162,8 @@ import QRCode from 'https://esm.sh/qrcode@1.5.3';
   const RELAYS = ${JSON.stringify(relayList)};
   const APP = 'fips.video.v1';
   const DEFAULT_STUN_URLS = [
-    ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:45.77.228.152:3478')},
+    ${JSON.stringify(process.env.FIPS_STUN_URL || 'stun:fips.tomdwyer.uk:3478')},
+    'stun:45.77.228.152:3478',
     'stun:stun.l.google.com:19302',
     'stun:stun1.l.google.com:19302',
     'stun:stun.cloudflare.com:3478',
