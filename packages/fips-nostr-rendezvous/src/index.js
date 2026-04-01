@@ -161,6 +161,25 @@ function publishEvent({ pool, relays, sk, evt, logContext }) {
     });
 }
 
+function subscribeDirectMessages({ pool, relays, recipientPubkey, handlers, since }) {
+  const filters = [
+    { kinds: [1059], '#p': [recipientPubkey], since },
+    { kinds: [1059], since },
+  ];
+  const subs = filters.map((filter) => pool.subscribeMany(relays, filter, handlers));
+  return {
+    close() {
+      for (const sub of subs) {
+        try {
+          sub.close();
+        } catch {
+          // ignore close errors
+        }
+      }
+    },
+  };
+}
+
 class FipsStackSession extends EventEmitter {
   constructor({ socket, remote, sessionId }) {
     super();
@@ -264,10 +283,12 @@ export class FipsNostrRendezvousNode extends EventEmitter {
       }
     });
 
-    this.sub = this.pool.subscribeMany(
-      this.relays,
-      { kinds: [1059], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
-      {
+    this.sub = subscribeDirectMessages({
+      pool: this.pool,
+      relays: this.relays,
+      recipientPubkey: this.pubkey,
+      since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60,
+      handlers: {
         onevent: async (evt) => {
           try {
             const rumor = unwrapEvent(evt, this.sk);
@@ -354,7 +375,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
           }
         },
       },
-    );
+    });
 
     if (this.advertise) {
       this._publishAdvert();
@@ -381,16 +402,18 @@ export class FipsNostrRendezvousNode extends EventEmitter {
   async listAdvertisedPeers(opts = {}) {
     const waitMs = opts.waitMs || 15000;
     const maxPeers = opts.maxPeers || 20;
+    const settleMs = opts.settleMs ?? 750;
     const excludedNpubs = new Set(opts.excludePublisherNpubs || []);
     const filter = typeof opts.filter === 'function' ? opts.filter : () => true;
 
     return await new Promise((resolve) => {
-      const started = Date.now();
       let timeout = null;
+      let settleTimer = null;
       const byPublisher = new Map();
 
       const finish = () => {
         if (timeout) clearTimeout(timeout);
+        if (settleTimer) clearTimeout(settleTimer);
         try { sub.close(); } catch {}
         resolve(sortAdverts([...byPublisher.values()]).slice(0, maxPeers));
       };
@@ -408,6 +431,10 @@ export class FipsNostrRendezvousNode extends EventEmitter {
               const existing = byPublisher.get(msg.publisherNpub);
               if (!existing || sortAdverts([msg, existing])[0] === msg) {
                 byPublisher.set(msg.publisherNpub, msg);
+              }
+              if (byPublisher.size >= maxPeers && settleMs >= 0) {
+                if (settleTimer) clearTimeout(settleTimer);
+                settleTimer = setTimeout(() => finish(), settleMs);
               }
             } catch {
               // ignore malformed adverts
@@ -462,10 +489,12 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     const response = await new Promise((resolve, reject) => {
       const started = Date.now();
       let timer;
-      const sub = this.pool.subscribeMany(
-        this.relays,
-        { kinds: [1059], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
-        {
+      const sub = subscribeDirectMessages({
+        pool: this.pool,
+        relays: this.relays,
+        recipientPubkey: this.pubkey,
+        since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60,
+        handlers: {
           onevent: async (evt) => {
             try {
               const rumor = unwrapEvent(evt, this.sk);
@@ -487,7 +516,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
             }
           },
         },
-      );
+      });
 
       this._publishDM(targetPubkey, offer, {
         kind: 'offer',
@@ -539,10 +568,16 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     this._startPunch(offer.nonce, remote, punch);
 
     const established = await this.waitForPunch(offer.nonce, opts.punchWaitMs || (punch?.durationMs || 30000) + 5000);
+    if (!established?.established) {
+      throw new Error('timed out waiting for UDP hole punch');
+    }
     remote = established?.remote || remote;
-    const session = new FipsStackSession({ socket: this.socket, remote, sessionId: offer.nonce });
-    this.sessions.set(offer.nonce, session);
-    this.emit('session', { sessionId: offer.nonce, remote, session });
+    let session = this.sessions.get(offer.nonce);
+    if (!session) {
+      session = new FipsStackSession({ socket: this.socket, remote, sessionId: offer.nonce });
+      this.sessions.set(offer.nonce, session);
+      this.emit('session', { sessionId: offer.nonce, remote, session });
+    }
     return { nonce: offer.nonce, established, remote, socket: this.socket, session, targetNpub };
   }
 

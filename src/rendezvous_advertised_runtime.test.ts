@@ -159,6 +159,40 @@ describe('advertised rendezvous runtime', () => {
     expect(adverts[0].publisherNpub).not.toBe(adverts[1].publisherNpub);
   });
 
+  it('can settle advert discovery early once enough peers are found', async () => {
+    const node = createFipsNostrRendezvousNode({
+      relays: ['wss://nip17.tomdwyer.uk'],
+      udpPort: 0,
+      advertise: false,
+    });
+
+    node.pool = {
+      subscribeMany(_relays: string[], _filter: Record<string, unknown>, handlers: { onevent: (evt: { content: string }) => void }) {
+        setTimeout(() => {
+          handlers.onevent({
+            content: JSON.stringify({
+              app: 'fips.nat.traversal.v1',
+              publisherNpub: nip19.npubEncode(getPublicKey(generateSecretKey())),
+              expiresAt: Date.now() + 60_000,
+              publishedAt: Date.now(),
+              sequence: 1,
+              relays: ['wss://nip17.tomdwyer.uk'],
+              stunServers: ['stun:fips.tomdwyer.uk:3478'],
+              transports: ['udp'],
+            }),
+          });
+        }, 0);
+        return { close() {} };
+      },
+    };
+
+    const startedAt = Date.now();
+    const adverts = await node.listAdvertisedPeers({ waitMs: 5_000, maxPeers: 1, settleMs: 25 });
+
+    expect(adverts).toHaveLength(1);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it('can exclude its own npub from advert discovery results', async () => {
     const node = createFipsNostrRendezvousNode({
       relays: ['wss://nip17.tomdwyer.uk'],
@@ -333,6 +367,7 @@ describe('advertised rendezvous runtime', () => {
     const targetPubkey = getPublicKey(targetSk);
     const targetNpub = nip19.npubEncode(targetPubkey);
     const published: Array<Record<string, unknown>> = [];
+    const filters: Array<Record<string, unknown>> = [];
     let dmHandler: ((evt: unknown) => void) | null = null;
 
     const node = createFipsNostrRendezvousNode({
@@ -354,6 +389,7 @@ describe('advertised rendezvous runtime', () => {
         return relays.map(() => Promise.resolve(true));
       },
       subscribeMany(_relays: string[], _filter: Record<string, unknown>, handlers: { onevent: (evt: unknown) => void }) {
+        filters.push(_filter);
         dmHandler = handlers.onevent;
         return { close() {} };
       },
@@ -379,6 +415,8 @@ describe('advertised rendezvous runtime', () => {
       ip: '198.51.100.10',
       port: 40123,
     });
+    expect(filters.some((filter) => Array.isArray(filter['#p']) && filter['#p'][0] === node.pubkey)).toBe(true);
+    expect(filters.some((filter) => !('#p' in filter))).toBe(true);
 
     expect(dmHandler).toBeTypeOf('function');
     const answerHandler = dmHandler as ((evt: unknown) => void) | null;

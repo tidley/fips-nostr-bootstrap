@@ -355,7 +355,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/api/discover') {
     try {
       const peers = discoveryEnabled ? await node.listAdvertisedPeers({
-        waitMs: 1500,
+        waitMs: 5000,
         maxPeers: 10,
         excludePublisherNpubs: [started.npub],
       }) : [];
