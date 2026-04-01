@@ -83,6 +83,7 @@ const pending = new Map();
 function writeLine(s=''){ term.value += s + '\\n'; term.scrollTop = term.scrollHeight; }
 function setPrompt(){ term.value += prompt; term.scrollTop = term.scrollHeight; }
 function init(){ term.value=''; writeLine('Connected UI ready. Discover peers or paste an npub and press Connect.'); setPrompt(); }
+function nextPaint(){ return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 function shortNpub(npub){
   if (!npub || npub.length <= 11) return npub || '';
   return npub.slice(0, 6) + '...' + npub.slice(-5);
@@ -247,12 +248,18 @@ async function refreshPeers() {
 document.getElementById('connect').onclick = async () => {
   if (transportBusy) return;
   const npub = document.getElementById('npub').value.trim();
+  let waitingTicker = null;
   try {
     setTransportBusy(true, npub ? 'Status: coordinating with ' + shortNpub(npub) : 'Status: coordinating with discovered peer...');
     writeLine(npub ? ('[connect] dialing ' + shortNpub(npub)) : '[connect] dialing first discovered peer');
     writeLine('[connect] waiting for relay coordination and UDP session establishment; this can take tens of seconds');
+    waitingTicker = setInterval(() => {
+      writeLine('[connect] still waiting for traversal session...');
+    }, 10000);
+    await nextPaint();
     const r = await fetch('/api/connect',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({npub})});
     const d = await r.json();
+    if (waitingTicker) clearInterval(waitingTicker);
     if (!d.ok) {
       writeLine('[connect error] ' + d.error);
       setTransportBusy(false, 'Status: idle');
@@ -261,6 +268,7 @@ document.getElementById('connect').onclick = async () => {
       writeLine('[connected] ' + d.sessionId + source);
     }
   } catch (err) {
+    if (waitingTicker) clearInterval(waitingTicker);
     writeLine('[connect error] ' + String(err.message || err));
     setTransportBusy(false, 'Status: idle');
   }
@@ -303,8 +311,13 @@ const server = http.createServer(async (req, res) => {
     let b = '';
     req.on('data', (d) => (b += d));
     req.on('end', async () => {
+      const startedAt = Date.now();
       try {
         const { npub } = JSON.parse(b || '{}');
+        console.log('[web-console] connect request', JSON.stringify({
+          target: npub || '(first-discovered-peer)',
+          mode: npub ? 'explicit-npub' : 'advert-discovery',
+        }));
         if (npub && npub === started.npub) throw new Error('refusing to connect to self');
         const conn = discoveryEnabled
           ? (npub
@@ -312,6 +325,11 @@ const server = http.createServer(async (req, res) => {
               : await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 }))
           : await node.connect(npub, { waitMs: 60000 });
         attachSession(conn.nonce, conn.remote, conn.session);
+        console.log('[web-console] connect success', JSON.stringify({
+          sessionId: conn.nonce,
+          remote: conn.remote,
+          elapsedMs: Date.now() - startedAt,
+        }));
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({
           ok: true,
@@ -321,6 +339,10 @@ const server = http.createServer(async (req, res) => {
           discoveredAdvert: conn.discoveredAdvert || null,
         }));
       } catch (e) {
+        console.error('[web-console] connect failure', JSON.stringify({
+          error: String(e.message || e),
+          elapsedMs: Date.now() - startedAt,
+        }));
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
       }
