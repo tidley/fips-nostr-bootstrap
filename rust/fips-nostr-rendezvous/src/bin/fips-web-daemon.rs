@@ -806,23 +806,6 @@ async fn main() -> Result<()> {
     state.refresh_traversal_observation(true).await.ok();
     state.publish_inbox_relays().await.ok();
 
-    state
-        .client
-        .subscribe_to(
-            state.dm_relays.clone(),
-            Filter::new().kind(Kind::GiftWrap).pubkey(state.pubkey).limit(0),
-            None,
-        )
-        .await?;
-    state
-        .client
-        .subscribe_to(
-            state.advert_relays.clone(),
-            Filter::new().kind(Kind::Custom(ADVERT_KIND)),
-            None,
-        )
-        .await?;
-
     let notify_state = state.clone();
     let notify_task = tokio::spawn(async move {
         let mut notifications = notify_state.client.notifications();
@@ -946,6 +929,33 @@ async fn main() -> Result<()> {
             "discoveryEnabled": !args.no_discover,
         }))?
     );
+
+    let subscribe_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(err) = subscribe_state
+            .client
+            .subscribe_to(
+                subscribe_state.dm_relays.clone(),
+                Filter::new().kind(Kind::GiftWrap).pubkey(subscribe_state.pubkey).limit(0),
+                None,
+            )
+            .await
+        {
+            tracing::error!("failed to subscribe to DM relays: {err:#}");
+        }
+
+        if let Err(err) = subscribe_state
+            .client
+            .subscribe_to(
+                subscribe_state.advert_relays.clone(),
+                Filter::new().kind(Kind::Custom(ADVERT_KIND)),
+                None,
+            )
+            .await
+        {
+            tracing::error!("failed to subscribe to advert relays: {err:#}");
+        }
+    });
 
     tokio::select! {
         res = axum::serve(listener, app) => { res?; }

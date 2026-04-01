@@ -275,4 +275,28 @@ describe('web console runtime app integration', () => {
     expect(connected.discoveredAdvert?.publisherNpub).toBe(serverNpub);
     expect(clientApp.stdout.join('')).toContain('[web-console] target advert observed');
   }, 45000);
+
+  it('starts the web console HTTP surface even when relays are unreachable', async () => {
+    const badHttpPort = await reservePort();
+    const badRelayApp = spawnApp(
+      ['apps/fips-web-console.mjs', '--http-port', String(badHttpPort), '--udp-port', '0', '--relays', 'ws://127.0.0.1:1'],
+      {
+        NOSTR_NSEC: CLIENT_NSEC,
+      },
+    );
+
+    try {
+      await waitFor(
+        async () => {
+          const response = await fetch(`http://127.0.0.1:${badHttpPort}/`).catch(() => null);
+          return response?.ok ?? false;
+        },
+        Boolean,
+        120000,
+        250,
+      );
+    } finally {
+      await badRelayApp.close();
+    }
+  }, 135000);
 });
