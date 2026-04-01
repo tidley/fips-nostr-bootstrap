@@ -375,6 +375,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
   async listAdvertisedPeers(opts = {}) {
     const waitMs = opts.waitMs || 15000;
     const maxPeers = opts.maxPeers || 20;
+    const excludedNpubs = new Set(opts.excludePublisherNpubs || []);
     const filter = typeof opts.filter === 'function' ? opts.filter : () => true;
 
     return await new Promise((resolve) => {
@@ -396,6 +397,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
             try {
               const msg = JSON.parse(evt.content);
               if (!isTraversalAdvertMessage(msg)) return;
+              if (excludedNpubs.has(msg.publisherNpub)) return;
               if (!filter(msg)) return;
               const existing = byPublisher.get(msg.publisherNpub);
               if (!existing || sortAdverts([msg, existing])[0] === msg) {
@@ -432,6 +434,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
     const adverts = await this.listAdvertisedPeers({
       waitMs: opts.discoveryWaitMs || opts.waitMs || 15000,
       maxPeers: 1,
+      excludePublisherNpubs: opts.includeSelf ? [] : [this.npub],
     });
     if (adverts.length === 0) {
       throw new Error(`timed out waiting for any traversal advert after ${opts.discoveryWaitMs || opts.waitMs || 15000}ms`);
@@ -440,6 +443,7 @@ export class FipsNostrRendezvousNode extends EventEmitter {
   }
 
   async connect(targetNpub, opts = {}) {
+    if (targetNpub === this.npub) throw new Error('refusing to connect to self');
     const target = nip19.decode(targetNpub);
     if (target.type !== 'npub') throw new Error('target must be npub');
     const targetPubkey = target.data;

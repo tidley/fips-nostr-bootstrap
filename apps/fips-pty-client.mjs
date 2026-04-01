@@ -20,6 +20,7 @@ const node = createFipsNostrRendezvousNode({
   relays,
   nsec: process.env.NOSTR_NSEC,
   publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
+  advertise: false,
 });
 const started = await node.start();
 
