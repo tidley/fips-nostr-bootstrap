@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import 'dotenv/config';
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import {
-  createFipsNostrRendezvousNode,
   DEFAULT_ADVERT_RELAYS,
   DEFAULT_DM_RELAYS,
 } from '../packages/fips-nostr-rendezvous/src/index.js';
@@ -13,43 +14,124 @@ function arg(name, fallback = '') {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('failed to reserve port'));
+        return;
+      }
+      const { port } = address;
+      server.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+async function waitForJson(url, timeoutMs = 15000) {
+  const started = Date.now();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return await response.json();
+    } catch {
+      // retry
+    }
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`timed out waiting for ${url}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+async function readRequestBody(req) {
+  return await new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
 const httpPort = Number(arg('--http-port', '8787'));
 const udpPort = Number(arg('--udp-port', '0'));
 const discoveryEnabled = !process.argv.includes('--no-discover');
-const relays = (arg('--relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const advertRelays = (arg('--advert-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
-const dmRelays = (arg('--dm-relays', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
+const relays = splitList(arg('--relays', ''));
+const advertRelays = splitList(arg('--advert-relays', ''));
+const dmRelays = splitList(arg('--dm-relays', ''));
 const effectiveAdvertRelays = relays.length ? [...relays] : (advertRelays.length ? advertRelays : [...DEFAULT_ADVERT_RELAYS]);
 const effectiveDmRelays = relays.length ? [...relays] : (dmRelays.length ? dmRelays : [...DEFAULT_DM_RELAYS]);
 
-const node = createFipsNostrRendezvousNode({
-  udpPort,
-  advertRelays: effectiveAdvertRelays,
-  dmRelays: effectiveDmRelays,
-  nsec: process.env.NOSTR_NSEC,
-  publicHost: process.env.FIPS_UDP_PUBLIC_HOST,
-  advertise: false,
-});
-const started = await node.start();
-
-let active = null;
-const eventClients = new Set();
-
-function emit(type, data) {
-  const line = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of eventClients) res.write(line);
+const daemonPort = Number(arg('--daemon-port', String(await reservePort())));
+const rustDaemonBinary = `${process.cwd()}/rust/fips-nostr-rendezvous/target/debug/fips-web-daemon`;
+const daemonCommand = existsSync(rustDaemonBinary) ? rustDaemonBinary : 'cargo';
+const daemonArgs = existsSync(rustDaemonBinary)
+  ? [
+      '--nsec',
+      process.env.NOSTR_NSEC || '',
+      '--http-port',
+      String(daemonPort),
+      '--udp-port',
+      String(udpPort),
+      '--advert-relays',
+      effectiveAdvertRelays.join(','),
+      '--dm-relays',
+      effectiveDmRelays.join(','),
+    ]
+  : [
+      'run',
+      '--quiet',
+      '--manifest-path',
+      'rust/fips-nostr-rendezvous/Cargo.toml',
+      '--bin',
+      'fips-web-daemon',
+      '--',
+      '--nsec',
+      process.env.NOSTR_NSEC || '',
+      '--http-port',
+      String(daemonPort),
+      '--udp-port',
+      String(udpPort),
+      '--advert-relays',
+      effectiveAdvertRelays.join(','),
+      '--dm-relays',
+      effectiveDmRelays.join(','),
+    ];
+if (!discoveryEnabled) daemonArgs.push('--no-discover');
+if (process.env.FIPS_UDP_PUBLIC_HOST) {
+  daemonArgs.push('--public-host', process.env.FIPS_UDP_PUBLIC_HOST);
+}
+if (process.env.FIPS_STUN_SERVERS) {
+  daemonArgs.push('--stun-servers', process.env.FIPS_STUN_SERVERS);
 }
 
-function attachSession(sessionId, remote, session) {
-  if (active?.sessionId === sessionId) return;
-  active = { sessionId, remote, session };
-  session.on('channel:shell_result', (payload) => emit('result', payload));
-  emit('status', { connected: true, sessionId, remote });
-}
-
-node.on('session', ({ sessionId, remote, session }) => {
-  attachSession(sessionId, remote, session);
+const daemon = spawn(daemonCommand, daemonArgs, {
+  cwd: process.cwd(),
+  env: { ...process.env },
+  stdio: ['ignore', 'pipe', 'pipe'],
 });
+daemon.stdout.on('data', (chunk) => process.stdout.write(String(chunk)));
+daemon.stderr.on('data', (chunk) => process.stderr.write(String(chunk)));
+daemon.on('exit', (code, signal) => {
+  if (code === 0 || signal === 'SIGINT' || signal === 'SIGTERM') return;
+  console.error('[web-console] rust daemon exited', JSON.stringify({ code, signal }));
+});
+
+const daemonBase = `http://127.0.0.1:${daemonPort}`;
+const meta = await waitForJson(`${daemonBase}/api/meta`);
 
 const html = `<!doctype html>
 <html><head><meta charset="utf-8"/><title>FIPS SSH-like Console</title>
@@ -65,7 +147,7 @@ button{cursor:pointer}
 </style></head><body>
 <h3>FIPS SSH-like Console</h3>
 <div class="panel" style="margin-bottom:10px">
-  <div class="meta">Local npub: <code>${started.npub}</code></div>
+  <div class="meta">Local npub: <code>${meta.npub}</code></div>
   <div style="margin-top:8px;display:flex;gap:8px">
     <input id="npub" placeholder="Target npub or leave blank to discover" style="flex:1"/>
     <button id="discover">Discover</button>
@@ -290,161 +372,140 @@ refreshPeers().catch(() => {});
 </script>
 </body></html>`;
 
+async function proxyJson(req, res, path) {
+  const body = req.method === 'POST' ? await readRequestBody(req) : undefined;
+
+  if (path === '/api/connect' && body) {
+    try {
+      const parsed = JSON.parse(body);
+      const npub = String(parsed?.npub || '').trim();
+      console.log('[web-console] connect request', JSON.stringify({
+        target: npub || '(first-discovered-peer)',
+        mode: npub ? 'explicit-npub-direct' : 'advert-discovery',
+      }));
+    } catch {}
+  }
+
+  const upstream = await fetch(`${daemonBase}${path}`, {
+    method: req.method,
+    headers: { 'content-type': req.headers['content-type'] || 'application/json' },
+    body,
+  });
+  const text = await upstream.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { ok: false, error: text || `unexpected response from ${path}` };
+  }
+
+  if (path === '/api/connect') {
+    if (json?.ok) {
+      if (json.discoveredAdvert?.publisherNpub) {
+        console.log('[web-console] target advert observed', JSON.stringify({
+          target: json.discoveredAdvert.publisherNpub,
+          advertRelays: json.discoveredAdvert.relays,
+          publishedAt: json.discoveredAdvert.publishedAt,
+        }));
+      }
+      console.log('[web-console] connect success', JSON.stringify({
+        sessionId: json.sessionId,
+        remote: json.remote,
+      }));
+    } else {
+      console.error('[web-console] connect failure', JSON.stringify({
+        error: String(json?.error || 'unknown'),
+      }));
+    }
+  }
+
+  res.writeHead(upstream.status || 200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(json));
+}
+
+async function proxySse(res) {
+  const upstream = await fetch(`${daemonBase}/api/events`, {
+    headers: { accept: 'text/event-stream' },
+  });
+  if (!upstream.ok || !upstream.body) {
+    res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('failed to connect to rust daemon event stream');
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  const reader = upstream.body.getReader();
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
+    res.end();
+  }
+}
+
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(html);
-    return;
-  }
-
-  if (req.method === 'GET' && req.url === '/api/events') {
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-    });
-    eventClients.add(res);
-    const keepalive = setInterval(() => {
-      try {
-        res.write(': keepalive\\n\\n');
-      } catch {}
-    }, 15000);
-    res.write(`event: status\ndata: ${JSON.stringify({ connected: !!active, sessionId: active?.sessionId || null, remote: active?.remote || null })}\n\n`);
-    req.on('close', () => {
-      clearInterval(keepalive);
-      eventClients.delete(res);
-    });
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/api/connect') {
-    let b = '';
-    req.on('data', (d) => (b += d));
-    req.on('end', async () => {
-      const startedAt = Date.now();
-      try {
-        const { npub } = JSON.parse(b || '{}');
-        console.log('[web-console] connect request', JSON.stringify({
-          target: npub || '(first-discovered-peer)',
-          mode: npub ? 'explicit-npub-direct' : 'advert-discovery',
-        }));
-        if (npub && npub === started.npub) throw new Error('refusing to connect to self');
-        let conn;
-        if (discoveryEnabled) {
-          if (npub) {
-            try {
-              const advert = await node.findAdvertisedPeer(npub, { waitMs: 2000, settleMs: 500 });
-              console.log('[web-console] target advert observed', JSON.stringify({
-                target: npub,
-                advertRelays: advert.relays,
-                publishedAt: advert.publishedAt,
-              }));
-              conn = await node.connectFromAdvert(advert, { waitMs: 60000 });
-            } catch (err) {
-              console.warn('[web-console] target advert not observed; falling back to direct connect', JSON.stringify({
-                target: npub,
-                error: String(err.message || err),
-              }));
-              conn = await node.connect(npub, { waitMs: 60000 });
-            }
-          } else {
-            conn = await node.connectToDiscoveredPeer({ discoveryWaitMs: 60000, waitMs: 60000 });
-          }
-        } else {
-          conn = await node.connect(npub, { waitMs: 60000 });
-        }
-        attachSession(conn.nonce, conn.remote, conn.session);
-        console.log('[web-console] connect success', JSON.stringify({
-          sessionId: conn.nonce,
-          remote: conn.remote,
-          elapsedMs: Date.now() - startedAt,
-        }));
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          ok: true,
-          sessionId: conn.nonce,
-          remote: conn.remote,
-          discovered: Boolean(conn.discoveredAdvert),
-          discoveredAdvert: conn.discoveredAdvert || null,
-        }));
-      } catch (e) {
-        console.error('[web-console] connect failure', JSON.stringify({
-          error: String(e.message || e),
-          elapsedMs: Date.now() - startedAt,
-        }));
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
-      }
-    });
-    return;
-  }
-
-  if (req.method === 'GET' && req.url === '/api/discover') {
-    try {
-      const peers = discoveryEnabled ? await node.listAdvertisedPeers({
-        waitMs: 5000,
-        maxPeers: 10,
-        excludePublisherNpubs: [started.npub],
-      }) : [];
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, peers }));
-    } catch (e) {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: String(e.message || e), peers: [] }));
+  try {
+    if (req.method === 'GET' && req.url === '/') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
     }
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/api/cmd') {
-    let b = '';
-    req.on('data', (d) => (b += d));
-    req.on('end', async () => {
-      try {
-        if (!active?.session) throw new Error('not connected');
-        const { cmd } = JSON.parse(b || '{}');
-        const id = randomUUID();
-        active.session.send('shell', { id, cmd }, 'request');
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, id }));
-      } catch (e) {
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
-      }
-    });
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/api/ctrlc') {
-    try {
-      if (!active?.session) throw new Error('not connected');
-      active.session.send('shell_interrupt', { ts: Date.now() }, 'request');
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-    } catch (e) {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+    if (req.method === 'GET' && req.url === '/api/events') {
+      await proxySse(res);
+      return;
     }
-    return;
+    if (req.url === '/api/discover' && req.method === 'GET') {
+      await proxyJson(req, res, '/api/discover');
+      return;
+    }
+    if (req.url === '/api/connect' && req.method === 'POST') {
+      await proxyJson(req, res, '/api/connect');
+      return;
+    }
+    if (req.url === '/api/cmd' && req.method === 'POST') {
+      await proxyJson(req, res, '/api/cmd');
+      return;
+    }
+    if (req.url === '/api/ctrlc' && req.method === 'POST') {
+      await proxyJson(req, res, '/api/ctrlc');
+      return;
+    }
+    res.writeHead(404);
+    res.end('not found');
+  } catch (error) {
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: String(error.message || error) }));
   }
-
-  res.writeHead(404);
-  res.end('not found');
 });
 
 server.listen(httpPort, () => {
   console.log(JSON.stringify({
     app: 'fips-web-console',
     http: `http://127.0.0.1:${httpPort}`,
-    npub: started.npub,
-    udpPort: started.udpPort,
+    npub: meta.npub,
+    udpPort: meta.udpPort,
     advertRelays: effectiveAdvertRelays,
     dmRelays: effectiveDmRelays,
     relaySource: relays.length ? 'cli-shared' : ((advertRelays.length || dmRelays.length) ? 'cli-split' : 'embedded-defaults'),
+    runtime: 'rust-daemon',
   }, null, 2));
 });
 
-process.on('SIGINT', () => {
+async function shutdown() {
   server.close();
-  node.close();
+  if (daemon.exitCode === null && daemon.signalCode === null) {
+    daemon.kill('SIGINT');
+  }
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
