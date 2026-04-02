@@ -11,24 +11,16 @@ pub const PUNCH_ACK_MAGIC: u32 = 0x4E505441;
 
 pub const DEFAULT_ADVERT_RELAYS: &[&str] = &[
     "wss://offchain.pub",
-    "wss://www.nostr.ltd",
-    "wss://relay.nostr.band",
 ];
 
 pub const DEFAULT_DM_RELAYS: &[&str] = &[
     "wss://nip17.com",
-    "wss://nip17.tomdwyer.uk",
-    "wss://relay.nostr.band",
     "wss://offchain.pub",
-    "wss://www.nostr.ltd",
 ];
 
 pub const DEFAULT_STUN_SERVERS: &[&str] = &[
     "stun:fips.tomdwyer.uk:3478",
-    "stun:45.77.228.152:3478",
     "stun:stun.l.google.com:19302",
-    "stun:stun1.l.google.com:19302",
-    "stun:stun.cloudflare.com:3478",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,6 +6,7 @@ describe('STUN defaults', () => {
   it('includes fips.tomdwyer.uk as the primary STUN server', () => {
     expect(DEFAULT_STUN_SERVER).toBe('stun:fips.tomdwyer.uk:3478');
     expect(DEFAULT_STUN_SERVERS).toContain('stun:fips.tomdwyer.uk:3478');
+    expect(DEFAULT_STUN_SERVERS).toContain('stun:stun.l.google.com:19302');
   });
 
   it('parses and deduplicates configured STUN server lists', () => {

@@ -21,29 +21,18 @@ const PUNCH_MAGIC = 0x4e505443;
 const PUNCH_ACK_MAGIC = 0x4e505441;
 export const DEFAULT_RELAYS = [
     'wss://offchain.pub',
-    'wss://www.nostr.ltd',
-    'wss://relay.nostr.band',
     'wss://nip17.com',
-    'wss://nip17.tomdwyer.uk',
 ];
 export const DEFAULT_ADVERT_RELAYS = [
     'wss://offchain.pub',
-    'wss://www.nostr.ltd',
-    'wss://relay.nostr.band',
 ];
 export const DEFAULT_DM_RELAYS = [
     'wss://nip17.com',
-    'wss://nip17.tomdwyer.uk',
-    'wss://relay.nostr.band',
     'wss://offchain.pub',
-    'wss://www.nostr.ltd',
 ];
 export const DEFAULT_STUN_SERVERS = [
     'stun:fips.tomdwyer.uk:3478',
-    'stun:45.77.228.152:3478',
     'stun:stun.l.google.com:19302',
-    'stun:stun1.l.google.com:19302',
-    'stun:stun.cloudflare.com:3478',
 ];
 async function ensureWs() {
     if (typeof globalThis.WebSocket !== 'undefined') {
