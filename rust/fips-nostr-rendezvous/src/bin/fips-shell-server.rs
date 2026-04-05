@@ -171,6 +171,42 @@ struct StunObservation {
     local_interface_addresses: Vec<String>,
 }
 
+fn log_traversal_observation(role: &str, observation: Option<&StunObservation>) {
+    if let Some(observation) = observation {
+        println!(
+            "[traversal] observation {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": observation.server,
+                "reflexiveAddress": observation.reflexive_address,
+                "localPort": observation.local_port,
+                "localInterfaceAddresses": observation.local_interface_addresses,
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        );
+        if observation.reflexive_address.is_none() {
+            println!(
+                "[traversal] warning {}",
+                serde_json::to_string(&json!({
+                    "role": role,
+                    "reason": "no reflexive STUN address observed; internet punching may fail and local interface fallback may be incorrect",
+                    "localInterfaceAddresses": observation.local_interface_addresses,
+                }))
+                .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+            );
+        }
+    } else {
+        println!(
+            "[traversal] warning {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "reason": "no traversal observation available",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        );
+    }
+}
+
 struct SessionState {
     remote: SocketAddr,
     cwd: PathBuf,
@@ -656,7 +692,8 @@ async fn main() -> Result<()> {
         session_hashes: Mutex::new(HashMap::new()),
     });
 
-    state.refresh_traversal_observation(true).await?;
+    let observation = state.refresh_traversal_observation(true).await?;
+    log_traversal_observation("server", observation.as_ref());
     state.publish_inbox_relays().await?;
     state.publish_advert().await?;
 

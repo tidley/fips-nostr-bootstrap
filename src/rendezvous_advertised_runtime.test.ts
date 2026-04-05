@@ -83,6 +83,7 @@ describe('advertised rendezvous runtime', () => {
     expect(node.advertRelays).toEqual(DEFAULT_ADVERT_RELAYS);
     expect(node.dmRelays).toEqual(DEFAULT_DM_RELAYS);
     expect(node.relays).toEqual(DEFAULT_RELAYS);
+    expect(node.advertRelays).toContain('wss://strfry.bitsbytom.com');
   });
 
   it('treats an explicit publicHost override as sufficient and skips default STUN servers unless explicitly configured', () => {

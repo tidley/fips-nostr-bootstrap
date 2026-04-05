@@ -21,11 +21,11 @@ What works today:
 - STUN-assisted address observation
 - UDP hole punching with binary probe/ack packets
 - a working shell demo over the punched UDP path
-- JS client/UI talking to either the JS runtime or the new Rust shell server
+- a Rust shell server and a Rust web daemon behind the `.mjs` web UI
 
 What is still incomplete:
 - full upstream FIPS handoff
-- fully Rust-native client/dialer path
+- Rust `offer/answer` parity with the richer JS traversal path
 - full live public-relay reliability hardening
 - final transport policy/fallback story for upstream FIPS
 
@@ -76,6 +76,7 @@ Current scope:
 - legacy `hello -> server-info` wire structs
 - `FIPS1` session frame helpers
 - long-running Rust shell server binary
+- Rust web daemon used by the web console client path
 
 See [rust/fips-nostr-rendezvous/README.md](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/README.md).
 
@@ -141,11 +142,27 @@ cd rust/fips-nostr-rendezvous
 cargo test
 ```
 
-Run the Rust shell server:
+Run the known-good Rust demo profile:
 
 ```bash
-cd rust/fips-nostr-rendezvous
-cargo run --bin fips-shell-server -- --nsec "$NOSTR_NSEC" --udp-port 9999
+cd /home/tom/code/fips-nostr-bootstrap && \
+FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
+cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
+  --nsec "$NOSTR_NSEC" \
+  --udp-port 9999 \
+  --advert-relays 'wss://offchain.pub' \
+  --dm-relays 'wss://nip17.com,wss://offchain.pub'
+```
+
+Run the Rust-backed web console client:
+
+```bash
+cd /home/tom/code/fips-nostr-bootstrap && \
+FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
+NOSTR_NSEC="$NOSTR_NSEC" \
+node apps/fips-web-console.mjs \
+  --advert-relays 'wss://offchain.pub' \
+  --dm-relays 'wss://nip17.com,wss://offchain.pub'
 ```
 
 Build and test the Rust bootstrap client:
@@ -160,8 +177,8 @@ cargo test
 Treat this repo as a bootstrap/traversal lab, not a single polished product.
 
 The practical split right now is:
-- TS/JS still provides most of the client/UI/test harness surface
-- Rust now has the first real long-running functional server path
+- TS/JS still provides UI/test harness surface
+- Rust now carries the working shell server path and the web-console client/daemon path
 - both coexist while the functional side is migrated toward Rust
 
 ## Verification
@@ -172,7 +189,7 @@ The repo currently uses:
 - `cargo test` for the Rust crates
 
 Notable current interop proof:
-- the Rust shell server can publish adverts, receive gift-wrapped DMs, establish a punched session, and serve shell commands to the current JS client runtime
+- the Rust shell server can publish adverts, receive gift-wrapped DMs, establish a punched session, and serve shell commands to the Rust web daemon behind the current web UI
 
 ## Bottom line
 

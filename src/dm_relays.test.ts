@@ -3,15 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_DM_RELAYS, DEFAULT_DM_RELAYS_CSV, parseDmRelayList } from './dm_relays.js';
 
 describe('DM relay defaults', () => {
-  it('includes the preferred NIP-17 relays', () => {
+  it('includes the preferred DM relays for the working demo profile', () => {
     expect(DEFAULT_DM_RELAYS).toContain('wss://nip17.com');
-    expect(DEFAULT_DM_RELAYS).toContain('wss://nip17.tomdwyer.uk');
+    expect(DEFAULT_DM_RELAYS).toContain('wss://offchain.pub');
   });
 
-  it('includes additional public DM-capable relays for fallback delivery attempts', () => {
-    expect(DEFAULT_DM_RELAYS).toContain('wss://relay.nostr.band');
-    expect(DEFAULT_DM_RELAYS).toContain('wss://offchain.pub');
-    expect(DEFAULT_DM_RELAYS).toContain('wss://www.nostr.ltd');
+  it('keeps the default DM relay set intentionally small', () => {
+    expect(DEFAULT_DM_RELAYS).toEqual(['wss://nip17.com', 'wss://offchain.pub']);
   });
 
   it('parses and de-duplicates relay lists', () => {
