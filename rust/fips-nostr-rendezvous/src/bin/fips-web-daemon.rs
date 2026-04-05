@@ -261,6 +261,54 @@ fn log_traversal_observation(role: &str, observation: Option<&StunObservation>) 
     }
 }
 
+fn log_stun_attempt(role: &str, stun_url: &str, local_port: u16, local_interface_addresses: &[String]) {
+    println!(
+        "[traversal] stun-attempt {}",
+        serde_json::to_string(&json!({
+            "role": role,
+            "server": stun_url,
+            "localPort": local_port,
+            "localInterfaceAddresses": local_interface_addresses,
+        }))
+        .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+    );
+}
+
+fn log_stun_result(
+    role: &str,
+    stun_url: &str,
+    local_port: u16,
+    local_interface_addresses: &[String],
+    result: Result<&LegacyEndpoint, &str>,
+) {
+    match result {
+        Ok(reflexive_address) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "reflexiveAddress": reflexive_address,
+                "status": "ok",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+        Err(error) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "error": error,
+                "status": "error",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+    }
+}
+
 struct AppState {
     client: Client,
     udp_socket: Arc<UdpSocket>,
@@ -324,16 +372,24 @@ impl AppState {
             .unwrap_or_default();
 
         for server in &self.stun_servers {
-            if let Ok(reflexive_address) = self.probe_stun_server(server).await {
-                let obs = StunObservation {
-                    server: server.clone(),
-                    reflexive_address: Some(reflexive_address),
-                    local_port,
-                    local_interface_addresses: local_interface_addresses.clone(),
-                };
-                *self.stun_observation.write().await = Some(obs.clone());
-                *self.stun_observed_at.lock().await = Some(Instant::now());
-                return Ok(Some(obs));
+            log_stun_attempt("client", server, local_port, &local_interface_addresses);
+            match self.probe_stun_server(server).await {
+                Ok(reflexive_address) => {
+                    log_stun_result("client", server, local_port, &local_interface_addresses, Ok(&reflexive_address));
+                    let obs = StunObservation {
+                        server: server.clone(),
+                        reflexive_address: Some(reflexive_address),
+                        local_port,
+                        local_interface_addresses: local_interface_addresses.clone(),
+                    };
+                    *self.stun_observation.write().await = Some(obs.clone());
+                    *self.stun_observed_at.lock().await = Some(Instant::now());
+                    return Ok(Some(obs));
+                }
+                Err(err) => {
+                    let error = err.to_string();
+                    log_stun_result("client", server, local_port, &local_interface_addresses, Err(&error));
+                }
             }
         }
 
@@ -511,6 +567,17 @@ impl AppState {
         let discovered_advert = self.find_advertised_peer(&target_npub).await?;
         let endpoint = self.local_client_endpoint().await?;
         let session_id = nonce();
+        println!(
+            "[rendezvous] hello prepared {}",
+            serde_json::to_string(&json!({
+                "targetNpub": target_npub,
+                "sessionId": session_id,
+                "clientEndpoint": endpoint,
+                "relays": relays,
+                "discoveredAdvertRelays": discovered_advert.as_ref().map(|advert| advert.relays.clone()),
+            }))
+            .unwrap_or_else(|_| "{\"kind\":\"log-error\"}".to_owned())
+        );
         let hello = LegacyHelloMessage {
             message_type: "fips.rendezvous.hello".to_owned(),
             version: "1.0".to_owned(),
@@ -856,52 +923,6 @@ async fn main() -> Result<()> {
         events: event_tx,
     });
 
-    let observation = state.refresh_traversal_observation(true).await.ok().flatten();
-    log_traversal_observation("client", observation.as_ref());
-    state.publish_inbox_relays().await.ok();
-
-    let notify_state = state.clone();
-    let notify_task = tokio::spawn(async move {
-        let mut notifications = notify_state.client.notifications();
-        while let Ok(notification) = notifications.recv().await {
-            match notification {
-                RelayPoolNotification::Event { event, .. } if event.kind == Kind::GiftWrap => {
-                    if let Ok(unwrapped) = nip59::extract_rumor(&notify_state.keys, &event).await {
-                        if unwrapped.rumor.kind != Kind::PrivateDirectMessage {
-                            continue;
-                        }
-                        if let Ok(msg) = serde_json::from_str::<LegacyServerInfoMessage>(&unwrapped.rumor.content) {
-                            if msg.message_type == "fips.rendezvous.server-info" {
-                                if let Some(tx) = notify_state.pending_server_info.lock().await.remove(&msg.nonce) {
-                                    let _ = tx.send(msg);
-                                }
-                            }
-                        }
-                    }
-                }
-                RelayPoolNotification::Event { event, .. } if event.kind == Kind::Custom(ADVERT_KIND) => {
-                    if let Ok(advert) = serde_json::from_str::<TraversalAdvert>(&event.content) {
-                        if advert.expires_at > now_ms() {
-                            let mut cache = notify_state.advert_cache.write().await;
-                            let replace = cache
-                                .get(&advert.publisher_npub)
-                                .map(|existing| {
-                                    advert.published_at > existing.published_at
-                                        || (advert.published_at == existing.published_at && advert.sequence >= existing.sequence)
-                                })
-                                .unwrap_or(true);
-                            if replace {
-                                cache.insert(advert.publisher_npub.clone(), advert);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    });
-
     let udp_state = state.clone();
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0_u8; 64 * 1024];
@@ -957,6 +978,52 @@ async fn main() -> Result<()> {
             }
         }
         #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let observation = state.refresh_traversal_observation(true).await.ok().flatten();
+    log_traversal_observation("client", observation.as_ref());
+    state.publish_inbox_relays().await.ok();
+
+    let notify_state = state.clone();
+    let notify_task = tokio::spawn(async move {
+        let mut notifications = notify_state.client.notifications();
+        while let Ok(notification) = notifications.recv().await {
+            match notification {
+                RelayPoolNotification::Event { event, .. } if event.kind == Kind::GiftWrap => {
+                    if let Ok(unwrapped) = nip59::extract_rumor(&notify_state.keys, &event).await {
+                        if unwrapped.rumor.kind != Kind::PrivateDirectMessage {
+                            continue;
+                        }
+                        if let Ok(msg) = serde_json::from_str::<LegacyServerInfoMessage>(&unwrapped.rumor.content) {
+                            if msg.message_type == "fips.rendezvous.server-info" {
+                                if let Some(tx) = notify_state.pending_server_info.lock().await.remove(&msg.nonce) {
+                                    let _ = tx.send(msg);
+                                }
+                            }
+                        }
+                    }
+                }
+                RelayPoolNotification::Event { event, .. } if event.kind == Kind::Custom(ADVERT_KIND) => {
+                    if let Ok(advert) = serde_json::from_str::<TraversalAdvert>(&event.content) {
+                        if advert.expires_at > now_ms() {
+                            let mut cache = notify_state.advert_cache.write().await;
+                            let replace = cache
+                                .get(&advert.publisher_npub)
+                                .map(|existing| {
+                                    advert.published_at > existing.published_at
+                                        || (advert.published_at == existing.published_at && advert.sequence >= existing.sequence)
+                                })
+                                .unwrap_or(true);
+                            if replace {
+                                cache.insert(advert.publisher_npub.clone(), advert);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok::<(), anyhow::Error>(())
     });
 
