@@ -923,52 +923,6 @@ async fn main() -> Result<()> {
         events: event_tx,
     });
 
-    let observation = state.refresh_traversal_observation(true).await.ok().flatten();
-    log_traversal_observation("client", observation.as_ref());
-    state.publish_inbox_relays().await.ok();
-
-    let notify_state = state.clone();
-    let notify_task = tokio::spawn(async move {
-        let mut notifications = notify_state.client.notifications();
-        while let Ok(notification) = notifications.recv().await {
-            match notification {
-                RelayPoolNotification::Event { event, .. } if event.kind == Kind::GiftWrap => {
-                    if let Ok(unwrapped) = nip59::extract_rumor(&notify_state.keys, &event).await {
-                        if unwrapped.rumor.kind != Kind::PrivateDirectMessage {
-                            continue;
-                        }
-                        if let Ok(msg) = serde_json::from_str::<LegacyServerInfoMessage>(&unwrapped.rumor.content) {
-                            if msg.message_type == "fips.rendezvous.server-info" {
-                                if let Some(tx) = notify_state.pending_server_info.lock().await.remove(&msg.nonce) {
-                                    let _ = tx.send(msg);
-                                }
-                            }
-                        }
-                    }
-                }
-                RelayPoolNotification::Event { event, .. } if event.kind == Kind::Custom(ADVERT_KIND) => {
-                    if let Ok(advert) = serde_json::from_str::<TraversalAdvert>(&event.content) {
-                        if advert.expires_at > now_ms() {
-                            let mut cache = notify_state.advert_cache.write().await;
-                            let replace = cache
-                                .get(&advert.publisher_npub)
-                                .map(|existing| {
-                                    advert.published_at > existing.published_at
-                                        || (advert.published_at == existing.published_at && advert.sequence >= existing.sequence)
-                                })
-                                .unwrap_or(true);
-                            if replace {
-                                cache.insert(advert.publisher_npub.clone(), advert);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    });
-
     let udp_state = state.clone();
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0_u8; 64 * 1024];
@@ -1024,6 +978,52 @@ async fn main() -> Result<()> {
             }
         }
         #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let observation = state.refresh_traversal_observation(true).await.ok().flatten();
+    log_traversal_observation("client", observation.as_ref());
+    state.publish_inbox_relays().await.ok();
+
+    let notify_state = state.clone();
+    let notify_task = tokio::spawn(async move {
+        let mut notifications = notify_state.client.notifications();
+        while let Ok(notification) = notifications.recv().await {
+            match notification {
+                RelayPoolNotification::Event { event, .. } if event.kind == Kind::GiftWrap => {
+                    if let Ok(unwrapped) = nip59::extract_rumor(&notify_state.keys, &event).await {
+                        if unwrapped.rumor.kind != Kind::PrivateDirectMessage {
+                            continue;
+                        }
+                        if let Ok(msg) = serde_json::from_str::<LegacyServerInfoMessage>(&unwrapped.rumor.content) {
+                            if msg.message_type == "fips.rendezvous.server-info" {
+                                if let Some(tx) = notify_state.pending_server_info.lock().await.remove(&msg.nonce) {
+                                    let _ = tx.send(msg);
+                                }
+                            }
+                        }
+                    }
+                }
+                RelayPoolNotification::Event { event, .. } if event.kind == Kind::Custom(ADVERT_KIND) => {
+                    if let Ok(advert) = serde_json::from_str::<TraversalAdvert>(&event.content) {
+                        if advert.expires_at > now_ms() {
+                            let mut cache = notify_state.advert_cache.write().await;
+                            let replace = cache
+                                .get(&advert.publisher_npub)
+                                .map(|existing| {
+                                    advert.published_at > existing.published_at
+                                        || (advert.published_at == existing.published_at && advert.sequence >= existing.sequence)
+                                })
+                                .unwrap_or(true);
+                            if replace {
+                                cache.insert(advert.publisher_npub.clone(), advert);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok::<(), anyhow::Error>(())
     });
 

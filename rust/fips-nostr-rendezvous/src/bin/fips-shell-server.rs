@@ -765,42 +765,6 @@ async fn main() -> Result<()> {
         session_hashes: Mutex::new(HashMap::new()),
     });
 
-    let observation = state.refresh_traversal_observation(true).await?;
-    log_traversal_observation("server", observation.as_ref());
-    state.publish_inbox_relays().await?;
-    state.publish_advert().await?;
-
-    let advertise_state = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(advertise_state.advertise_interval_ms));
-        loop {
-            interval.tick().await;
-            let _ = advertise_state.publish_advert().await;
-        }
-    });
-
-    state
-        .client
-        .subscribe_to(
-            state.dm_relays.clone(),
-            Filter::new().kind(Kind::GiftWrap).pubkey(state.pubkey).limit(0),
-            None,
-        )
-        .await?;
-
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "app": "fips-shell-server-rs",
-            "npub": npub,
-            "udpPort": udp_socket.local_addr()?.port(),
-            "advertRelays": state.advert_relays,
-            "dmRelays": state.dm_relays,
-            "relaySource": "embedded-defaults",
-            "trustedCount": state.trusted_npubs.len(),
-        }))?
-    );
-
     let udp_state = state.clone();
     let udp_task = tokio::spawn(async move {
         let mut buf = vec![0_u8; 64 * 1024];
@@ -864,6 +828,42 @@ async fn main() -> Result<()> {
         #[allow(unreachable_code)]
         Ok::<(), anyhow::Error>(())
     });
+
+    let observation = state.refresh_traversal_observation(true).await?;
+    log_traversal_observation("server", observation.as_ref());
+    state.publish_inbox_relays().await?;
+    state.publish_advert().await?;
+
+    let advertise_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(advertise_state.advertise_interval_ms));
+        loop {
+            interval.tick().await;
+            let _ = advertise_state.publish_advert().await;
+        }
+    });
+
+    state
+        .client
+        .subscribe_to(
+            state.dm_relays.clone(),
+            Filter::new().kind(Kind::GiftWrap).pubkey(state.pubkey).limit(0),
+            None,
+        )
+        .await?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "app": "fips-shell-server-rs",
+            "npub": npub,
+            "udpPort": udp_socket.local_addr()?.port(),
+            "advertRelays": state.advert_relays,
+            "dmRelays": state.dm_relays,
+            "relaySource": "embedded-defaults",
+            "trustedCount": state.trusted_npubs.len(),
+        }))?
+    );
 
     let notify_state = state.clone();
     let notify_task = tokio::spawn(async move {
