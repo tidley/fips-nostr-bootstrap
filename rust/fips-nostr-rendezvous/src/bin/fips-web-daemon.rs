@@ -261,6 +261,54 @@ fn log_traversal_observation(role: &str, observation: Option<&StunObservation>) 
     }
 }
 
+fn log_stun_attempt(role: &str, stun_url: &str, local_port: u16, local_interface_addresses: &[String]) {
+    println!(
+        "[traversal] stun-attempt {}",
+        serde_json::to_string(&json!({
+            "role": role,
+            "server": stun_url,
+            "localPort": local_port,
+            "localInterfaceAddresses": local_interface_addresses,
+        }))
+        .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+    );
+}
+
+fn log_stun_result(
+    role: &str,
+    stun_url: &str,
+    local_port: u16,
+    local_interface_addresses: &[String],
+    result: Result<&LegacyEndpoint, &str>,
+) {
+    match result {
+        Ok(reflexive_address) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "reflexiveAddress": reflexive_address,
+                "status": "ok",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+        Err(error) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "error": error,
+                "status": "error",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+    }
+}
+
 struct AppState {
     client: Client,
     udp_socket: Arc<UdpSocket>,
@@ -324,16 +372,24 @@ impl AppState {
             .unwrap_or_default();
 
         for server in &self.stun_servers {
-            if let Ok(reflexive_address) = self.probe_stun_server(server).await {
-                let obs = StunObservation {
-                    server: server.clone(),
-                    reflexive_address: Some(reflexive_address),
-                    local_port,
-                    local_interface_addresses: local_interface_addresses.clone(),
-                };
-                *self.stun_observation.write().await = Some(obs.clone());
-                *self.stun_observed_at.lock().await = Some(Instant::now());
-                return Ok(Some(obs));
+            log_stun_attempt("client", server, local_port, &local_interface_addresses);
+            match self.probe_stun_server(server).await {
+                Ok(reflexive_address) => {
+                    log_stun_result("client", server, local_port, &local_interface_addresses, Ok(&reflexive_address));
+                    let obs = StunObservation {
+                        server: server.clone(),
+                        reflexive_address: Some(reflexive_address),
+                        local_port,
+                        local_interface_addresses: local_interface_addresses.clone(),
+                    };
+                    *self.stun_observation.write().await = Some(obs.clone());
+                    *self.stun_observed_at.lock().await = Some(Instant::now());
+                    return Ok(Some(obs));
+                }
+                Err(err) => {
+                    let error = err.to_string();
+                    log_stun_result("client", server, local_port, &local_interface_addresses, Err(&error));
+                }
             }
         }
 
@@ -511,6 +567,17 @@ impl AppState {
         let discovered_advert = self.find_advertised_peer(&target_npub).await?;
         let endpoint = self.local_client_endpoint().await?;
         let session_id = nonce();
+        println!(
+            "[rendezvous] hello prepared {}",
+            serde_json::to_string(&json!({
+                "targetNpub": target_npub,
+                "sessionId": session_id,
+                "clientEndpoint": endpoint,
+                "relays": relays,
+                "discoveredAdvertRelays": discovered_advert.as_ref().map(|advert| advert.relays.clone()),
+            }))
+            .unwrap_or_else(|_| "{\"kind\":\"log-error\"}".to_owned())
+        );
         let hello = LegacyHelloMessage {
             message_type: "fips.rendezvous.hello".to_owned(),
             version: "1.0".to_owned(),

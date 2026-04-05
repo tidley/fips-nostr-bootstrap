@@ -221,6 +221,54 @@ fn log_traversal_observation(role: &str, observation: Option<&StunObservation>) 
     }
 }
 
+fn log_stun_attempt(role: &str, stun_url: &str, local_port: u16, local_interface_addresses: &[String]) {
+    println!(
+        "[traversal] stun-attempt {}",
+        serde_json::to_string(&json!({
+            "role": role,
+            "server": stun_url,
+            "localPort": local_port,
+            "localInterfaceAddresses": local_interface_addresses,
+        }))
+        .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+    );
+}
+
+fn log_stun_result(
+    role: &str,
+    stun_url: &str,
+    local_port: u16,
+    local_interface_addresses: &[String],
+    result: Result<&LegacyEndpoint, &str>,
+) {
+    match result {
+        Ok(reflexive_address) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "reflexiveAddress": reflexive_address,
+                "status": "ok",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+        Err(error) => println!(
+            "[traversal] stun-result {}",
+            serde_json::to_string(&json!({
+                "role": role,
+                "server": stun_url,
+                "localPort": local_port,
+                "localInterfaceAddresses": local_interface_addresses,
+                "error": error,
+                "status": "error",
+            }))
+            .unwrap_or_else(|_| "{\"role\":\"log-error\"}".to_owned())
+        ),
+    }
+}
+
 struct SessionState {
     remote: SocketAddr,
     cwd: PathBuf,
@@ -274,16 +322,24 @@ impl ServerState {
         }
 
         for server in &self.stun_servers {
-            if let Ok(reflexive) = self.probe_stun_server(server).await {
-                let obs = StunObservation {
-                    server: server.clone(),
-                    reflexive_address: Some(reflexive),
-                    local_port,
-                    local_interface_addresses: local_addresses.clone(),
-                };
-                *self.stun_observation.write().await = Some(obs.clone());
-                *self.stun_observed_at.lock().await = Some(Instant::now());
-                return Ok(Some(obs));
+            log_stun_attempt("server", server, local_port, &local_addresses);
+            match self.probe_stun_server(server).await {
+                Ok(reflexive) => {
+                    log_stun_result("server", server, local_port, &local_addresses, Ok(&reflexive));
+                    let obs = StunObservation {
+                        server: server.clone(),
+                        reflexive_address: Some(reflexive),
+                        local_port,
+                        local_interface_addresses: local_addresses.clone(),
+                    };
+                    *self.stun_observation.write().await = Some(obs.clone());
+                    *self.stun_observed_at.lock().await = Some(Instant::now());
+                    return Ok(Some(obs));
+                }
+                Err(err) => {
+                    let error = err.to_string();
+                    log_stun_result("server", server, local_port, &local_addresses, Err(&error));
+                }
             }
         }
 
@@ -880,16 +936,17 @@ async fn main() -> Result<()> {
                     }),
                 };
 
-                println!(
-                    "[rendezvous] hello received {}",
-                    serde_json::to_string(&json!({
-                        "fromNpub": from_npub,
-                        "nonce": hello.nonce,
-                        "sessionId": hello.session_id,
-                        "wants": hello.wants,
-                        "hasClientEndpoint": hello.client_endpoint.is_some(),
-                    }))?
-                );
+                    println!(
+                        "[rendezvous] hello received {}",
+                        serde_json::to_string(&json!({
+                            "fromNpub": from_npub,
+                            "nonce": hello.nonce,
+                            "sessionId": hello.session_id,
+                            "wants": hello.wants,
+                            "hasClientEndpoint": hello.client_endpoint.is_some(),
+                            "clientEndpoint": hello.client_endpoint,
+                        }))?
+                    );
 
                 notify_state
                     .send_dm_to(notify_state.dm_relays.clone(), sender, &reply, "server-info")
