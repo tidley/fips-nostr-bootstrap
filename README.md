@@ -144,22 +144,32 @@ cargo test
 
 Run the known-good Rust demo profile:
 
+
 ```bash
 cd /home/tom/code/fips-nostr-bootstrap && \
 FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
 cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
-  --nsec "$NOSTR_NSEC" \
+  --nsec "nsec1xcyh66j3q8ydq8h5deyamcwk2fxpvpyvh49mqeeux3agqcf23r9qwjg364" \
   --udp-port 9999 \
   --advert-relays 'wss://offchain.pub' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'
 ```
+
+FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
+cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
+  --nsec 'nsec1xcyh66j3q8ydq8h5deyamcwk2fxpvpyvh49mqeeux3agqcf23r9qwjg364' \
+  --udp-port 9999 \
+  --advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com' \
+  --dm-relays 'wss://nip17.com,wss://offchain.pub'
+
+
 
 Run the Rust-backed web console client:
 
 ```bash
 cd /home/tom/code/fips-nostr-bootstrap && \
 FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
-NOSTR_NSEC="$NOSTR_NSEC" \
+NOSTR_NSEC="nsec196t2fum4wcq0aqvlp0f04mfayetffcmd5fcj0d0su3xp5f8pwyys4f079c" \
 node apps/fips-web-console.mjs \
   --advert-relays 'wss://offchain.pub' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'

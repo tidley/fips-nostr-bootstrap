@@ -72,6 +72,20 @@ fn default_stun_servers() -> Vec<String> {
     DEFAULT_STUN_SERVERS.iter().map(|v| v.to_string()).collect()
 }
 
+fn parse_csv_env_list(name: &str) -> Option<Vec<String>> {
+    let raw = env::var(name).ok()?;
+    let values = raw
+        .split(',')
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -778,6 +792,9 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     if args.nsec.is_empty() {
         args.nsec = env::var("NOSTR_NSEC").context("missing --nsec or NOSTR_NSEC")?;
+    }
+    if let Some(stun_servers) = parse_csv_env_list("FIPS_STUN_SERVERS") {
+        args.stun_servers = stun_servers;
     }
     if args.public_host.is_none() {
         args.public_host = env::var("FIPS_UDP_PUBLIC_HOST").ok().filter(|v| !v.is_empty());
