@@ -19,7 +19,7 @@ cargo build
 ## Known-good demo profile
 
 These are the current known-good defaults for the internet demo:
-- advert relays: `wss://offchain.pub`
+- advert relays: `wss://offchain.pub,wss://strfry.bitsbytom.com`
 - DM relays: `wss://nip17.com,wss://offchain.pub`
 - STUN servers: `stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302`
 
@@ -31,7 +31,7 @@ FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
 cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
   --nsec "$NOSTR_NSEC" \
   --udp-port 9999 \
-  --advert-relays 'wss://offchain.pub' \
+  --advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'
 ```
 
@@ -42,14 +42,14 @@ cd /home/tom/code/fips-nostr-bootstrap && \
 FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
 NOSTR_NSEC="$NOSTR_NSEC" \
 node apps/fips-web-console.mjs \
-  --advert-relays 'wss://offchain.pub' \
+  --advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'
 ```
 
 Useful options:
 
 ```bash
---advert-relays 'wss://offchain.pub'
+--advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com'
 --dm-relays 'wss://nip17.com,wss://offchain.pub'
 --public-host '203.0.113.10'
 --stun-servers 'stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302'

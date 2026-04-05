@@ -23,11 +23,13 @@ const PUNCH_ACK_MAGIC = 0x4e505441;
 
 export const DEFAULT_RELAYS = [
   'wss://offchain.pub',
+  'wss://strfry.bitsbytom.com',
   'wss://nip17.com',
 ];
 
 export const DEFAULT_ADVERT_RELAYS = [
   'wss://offchain.pub',
+  'wss://strfry.bitsbytom.com',
 ];
 
 export const DEFAULT_DM_RELAYS = [

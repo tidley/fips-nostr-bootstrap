@@ -11,6 +11,7 @@ pub const PUNCH_ACK_MAGIC: u32 = 0x4E505441;
 
 pub const DEFAULT_ADVERT_RELAYS: &[&str] = &[
     "wss://offchain.pub",
+    "wss://strfry.bitsbytom.com",
 ];
 
 pub const DEFAULT_DM_RELAYS: &[&str] = &[

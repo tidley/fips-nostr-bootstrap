@@ -16,8 +16,8 @@ npm i @fips/nostr-rendezvous
 import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
 
 const server = createFipsNostrRendezvousNode({
-  advertRelays: ['wss://offchain.pub', 'wss://www.nostr.ltd', 'wss://relay.nostr.band'],
-  dmRelays: ['wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.nostr.band', 'wss://offchain.pub', 'wss://www.nostr.ltd'],
+  advertRelays: ['wss://offchain.pub', 'wss://strfry.bitsbytom.com'],
+  dmRelays: ['wss://nip17.com', 'wss://offchain.pub'],
   trustedNpubs: [], // optional allowlist
   udpPort: 9999,
 });
@@ -28,8 +28,8 @@ console.log('server npub:', server.getNpub());
 
 // On another machine/process:
 const client = createFipsNostrRendezvousNode({
-  advertRelays: ['wss://offchain.pub', 'wss://www.nostr.ltd', 'wss://relay.nostr.band'],
-  dmRelays: ['wss://nip17.com', 'wss://nip17.tomdwyer.uk', 'wss://relay.nostr.band', 'wss://offchain.pub', 'wss://www.nostr.ltd'],
+  advertRelays: ['wss://offchain.pub', 'wss://strfry.bitsbytom.com'],
+  dmRelays: ['wss://nip17.com', 'wss://offchain.pub'],
   udpPort: 0,
 });
 await client.start();
