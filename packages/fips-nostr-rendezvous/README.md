@@ -1,16 +1,49 @@
 # @fips/nostr-rendezvous
 
-Standalone library for **NIP-17 Nostr rendezvous + UDP hole punching**.
+TypeScript/JavaScript rendezvous library for Nostr discovery/signaling plus UDP hole punching.
 
-Purpose: bootstrap a direct path and then hand off to your app transport (SSH shell proxying, file transfer protocol, media, etc.).
+This package is still useful, but it is no longer the primary functional runtime in this repo. New functional work is now centered on the Rust crate in [rust/fips-nostr-rendezvous](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous).
 
-## Install
+## What This Package Is For
 
-```bash
-npm i @fips/nostr-rendezvous
-```
+Use it for:
+- protocol/reference behavior
+- JS interop
+- Node-based demos
+- test harnesses
 
-## Quick usage
+Do not treat it as the preferred place for new transport integration work.
+
+## Important Files
+
+- [src/index.ts](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/src/index.ts)
+  - JS rendezvous node
+  - advert publication/discovery
+  - STUN observation
+  - offer/answer support
+  - legacy compatibility
+- [src/index.js](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/src/index.js)
+  - generated runtime artifact used by the `.mjs` apps
+- [src/index.d.ts](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/src/index.d.ts)
+  - package types
+
+## Current Capabilities
+
+- NIP-17 DM rendezvous
+- public traversal advert publication/discovery
+- `kind 10050` inbox relay publication/lookup
+- STUN-driven endpoint discovery
+- Rust-aligned offer/answer support in the JS runtime
+- simultaneous UDP punch probes
+- lightweight `FIPS1` demo session framing
+
+## Still Missing
+
+- real downstream FIPS handoff
+- production-grade transport/fallback policy
+- replacement of demo framing with actual FIPS transport startup
+
+## Minimal Usage
 
 ```js
 import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
@@ -18,69 +51,49 @@ import { createFipsNostrRendezvousNode } from '@fips/nostr-rendezvous';
 const server = createFipsNostrRendezvousNode({
   advertRelays: ['wss://offchain.pub', 'wss://strfry.bitsbytom.com'],
   dmRelays: ['wss://nip17.com', 'wss://offchain.pub'],
-  trustedNpubs: [], // optional allowlist
   udpPort: 9999,
 });
 
 await server.start();
-console.log('server npub:', server.getNpub());
-// server now publishes a public traversal advert by default
+console.log(server.getNpub());
+```
 
-// On another machine/process:
+Client side:
+
+```js
 const client = createFipsNostrRendezvousNode({
   advertRelays: ['wss://offchain.pub', 'wss://strfry.bitsbytom.com'],
   dmRelays: ['wss://nip17.com', 'wss://offchain.pub'],
   udpPort: 0,
 });
+
 await client.start();
 const peers = await client.listAdvertisedPeers({ waitMs: 5000 });
 const session = await client.connectToDiscoveredPeer({ discoveryWaitMs: 5000, waitMs: 30000 });
-console.log(session);
 ```
 
-If you already know the target identity, `connectToAdvertisedPeer('<SERVER_NPUB>')` is still supported.
-
-If you omit relay settings, the library uses separate embedded defaults for advert relays and DM relays. You can still pass `relays` as a legacy shorthand to use one shared list for both.
+## Session Surface
 
 `session` includes:
-- `established` state
-- selected `remote` endpoint
+- `established`
+- selected `remote`
 - active UDP `socket`
 - `session` channel object with `.send(channel, payload, type)`
 
-Example channels:
+Example:
 
 ```js
-// app-level channels over established punched path
 session.session.send('shell', { cmd: 'uname -a' }, 'request');
-session.session.send('file', { name: 'foo.txt', chunk: 'base64...' }, 'chunk');
-session.session.send('media', { audio: 'opus-frame-base64' }, 'frame');
-
 session.session.on('channel:shell', (payload, frame) => {
-  console.log('shell payload', payload, frame.type);
+  console.log(payload, frame.type);
 });
 ```
 
-This is a lightweight framing layer to start integrating SSH/file/video style protocols; reliability/ordering/encryption policy beyond transport should be added by higher layers.
+This remains a demo/reference framing layer, not the final FIPS transport.
 
-## Trusted npubs
+## Next Logical Step
 
-Set ACL with:
-
-```js
-node.setTrustedNpubs(['npub1...','npub1...']);
-```
-
-Incoming rendezvous requests from unknown npubs are rejected (`reject` event).
-
-## Current scope
-
-- NIP-17 DM rendezvous
-- public availability advert publication/discovery
-- optional NIP-42 relay auth (via nostr-tools)
-- simultaneous UDP punch probes
-- allowlist-based trust gate
-
-Not yet included:
-- TURN/relay data fallback
-- built-in SSH/file/video protocol layers (you attach these after session establishment)
+For real FIPS integration, move to the Rust runtime and then into a branch of the upstream FIPS repo. This package should remain as:
+- interop/reference implementation
+- UI/demo support
+- regression surface for the Rust migration
