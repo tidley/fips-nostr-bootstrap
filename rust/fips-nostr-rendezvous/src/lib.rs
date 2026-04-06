@@ -1,3 +1,4 @@
+#[cfg(feature = "fips-handoff")]
 pub mod fips_handoff;
 
 use serde::{Deserialize, Serialize};

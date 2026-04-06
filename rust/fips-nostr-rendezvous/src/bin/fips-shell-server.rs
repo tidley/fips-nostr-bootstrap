@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+#[cfg(feature = "fips-handoff")]
 use fips_nostr_rendezvous::fips_handoff::handoff_established_traversal;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_answer, decode_session_frame, encode_session_frame,
@@ -1063,6 +1064,14 @@ async fn main() -> Result<()> {
                         let _ = udp_state.udp_socket.send_to(&ack, remote).await;
                     }
                     if udp_state.handoff_fips {
+                        #[cfg(not(feature = "fips-handoff"))]
+                        {
+                            return Err(anyhow::anyhow!(
+                                "FIPS handoff support was not compiled in; rebuild with `--features fips-handoff` and ensure the upstream `fips` crate checkout exists at the path configured in Cargo.toml"
+                            ));
+                        }
+                        #[cfg(feature = "fips-handoff")]
+                        {
                         let peer_npub = udp_state.pending_handoffs.lock().await.remove(&session_id);
                         if let Some(peer_npub) = peer_npub {
                             let handoff_socket = udp_state
@@ -1091,6 +1100,7 @@ async fn main() -> Result<()> {
                                 .unwrap_or_else(|_| "{\"kind\":\"log-error\"}".to_owned())
                             );
                             break;
+                        }
                         }
                     }
                     let _ = udp_state.ensure_session(&session_id, remote).await;

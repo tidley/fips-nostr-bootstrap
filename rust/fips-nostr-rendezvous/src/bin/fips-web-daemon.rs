@@ -11,6 +11,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
+#[cfg(feature = "fips-handoff")]
 use fips_nostr_rendezvous::fips_handoff::handoff_established_traversal;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_offer, decode_session_frame, encode_session_frame,
@@ -1128,6 +1129,14 @@ async fn api_connect(
         });
 
         if state.handoff_fips {
+            #[cfg(not(feature = "fips-handoff"))]
+            {
+                return Err(anyhow!(
+                    "FIPS handoff support was not compiled in; rebuild with `--features fips-handoff` and ensure the upstream `fips` crate checkout exists at the path configured in Cargo.toml"
+                ));
+            }
+            #[cfg(feature = "fips-handoff")]
+            {
             let _ = state.udp_shutdown.send(true);
             sleep(Duration::from_millis(50)).await;
             let handoff_socket = state.take_handoff_socket().await?;
@@ -1152,6 +1161,7 @@ async fn api_connect(
             response["handoff"] = serde_json::to_value(handoff)?;
             response["runtimeMode"] = json!("fips-handoff");
             return Ok(response);
+            }
         }
 
         state

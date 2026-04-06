@@ -14,7 +14,9 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
+#[cfg(feature = "fips-handoff")]
 use fips::AppCommand;
+#[cfg(feature = "fips-handoff")]
 use fips_nostr_rendezvous::fips_handoff::handoff_established_app_runtime;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_offer, decode_session_frame, parse_punch_packet,
@@ -238,6 +240,7 @@ struct FrameAssembly {
 #[derive(Debug, Clone)]
 struct VideoRuntimeHandle {
     peer_npub: String,
+    #[cfg(feature = "fips-handoff")]
     command_tx: tokio::sync::mpsc::Sender<AppCommand>,
 }
 
@@ -990,10 +993,12 @@ impl AppState {
         .await;
     }
 
+    #[cfg(feature = "fips-handoff")]
     async fn set_video_runtime(&self, runtime: VideoRuntimeHandle) {
         *self.video_runtime.lock().await = Some(runtime);
     }
 
+    #[cfg(feature = "fips-handoff")]
     async fn send_video_frame(&self, jpeg: Vec<u8>) -> Result<u32> {
         let runtime = self
             .video_runtime
@@ -1030,6 +1035,13 @@ impl AppState {
         }
 
         Ok(frame_id)
+    }
+
+    #[cfg(not(feature = "fips-handoff"))]
+    async fn send_video_frame(&self, _jpeg: Vec<u8>) -> Result<u32> {
+        Err(anyhow!(
+            "video datagram sending requires FIPS handoff support; rebuild with `--features fips-handoff` and ensure the upstream `fips` crate checkout exists at the path configured in Cargo.toml"
+        ))
     }
 
     async fn accept_video_datagram(&self, peer_npub: String, payload: Vec<u8>) -> Result<()> {
@@ -1261,54 +1273,63 @@ async fn api_connect(
         });
 
         if state.handoff_fips {
-            let _ = state.udp_shutdown.send(true);
-            sleep(Duration::from_millis(50)).await;
-            let handoff_socket = state.take_handoff_socket().await?;
-            let remote_addr = SocketAddr::new(
-                established_remote
-                    .host
-                    .parse()
-                    .context("invalid established remote host")?,
-                established_remote.port,
-            );
-            let runtime = handoff_established_app_runtime(
-                &state.resolved_nsec,
-                session_id.clone(),
-                target_npub.clone(),
-                handoff_socket,
-                remote_addr,
-                VIDEO_APP_PORT,
-            )
-            .await?;
-            let (handoff, command_tx, app_rx) = runtime.into_parts();
-            state
-                .set_video_runtime(VideoRuntimeHandle {
-                    peer_npub: target_npub.clone(),
-                    command_tx,
-                })
-                .await;
-            let frame_state = state.clone();
-            let runtime_handle = tokio::runtime::Handle::current();
-            tokio::task::spawn_blocking(move || {
-                while let Ok(datagram) = app_rx.recv() {
-                    let frame_state = frame_state.clone();
-                    let peer_npub = datagram.peer_npub;
-                    let payload = datagram.payload;
-                    runtime_handle.block_on(async move {
-                        if let Err(err) =
-                            frame_state.accept_video_datagram(peer_npub, payload).await
-                        {
-                            eprintln!("[video-runtime] frame-accept-error {err}");
-                        }
-                    });
-                }
-            });
-            state
-                .set_active_session(session_id.clone(), established_remote.clone())
-                .await;
-            response["handoff"] = serde_json::to_value(handoff)?;
-            response["runtimeMode"] = json!("fips-video");
-            return Ok(response);
+            #[cfg(not(feature = "fips-handoff"))]
+            {
+                return Err(anyhow!(
+                    "FIPS handoff support was not compiled in; rebuild with `--features fips-handoff` and ensure the upstream `fips` crate checkout exists at the path configured in Cargo.toml"
+                ));
+            }
+            #[cfg(feature = "fips-handoff")]
+            {
+                let _ = state.udp_shutdown.send(true);
+                sleep(Duration::from_millis(50)).await;
+                let handoff_socket = state.take_handoff_socket().await?;
+                let remote_addr = SocketAddr::new(
+                    established_remote
+                        .host
+                        .parse()
+                        .context("invalid established remote host")?,
+                    established_remote.port,
+                );
+                let runtime = handoff_established_app_runtime(
+                    &state.resolved_nsec,
+                    session_id.clone(),
+                    target_npub.clone(),
+                    handoff_socket,
+                    remote_addr,
+                    VIDEO_APP_PORT,
+                )
+                .await?;
+                let (handoff, command_tx, app_rx) = runtime.into_parts();
+                state
+                    .set_video_runtime(VideoRuntimeHandle {
+                        peer_npub: target_npub.clone(),
+                        command_tx,
+                    })
+                    .await;
+                let frame_state = state.clone();
+                let runtime_handle = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    while let Ok(datagram) = app_rx.recv() {
+                        let frame_state = frame_state.clone();
+                        let peer_npub = datagram.peer_npub;
+                        let payload = datagram.payload;
+                        runtime_handle.block_on(async move {
+                            if let Err(err) =
+                                frame_state.accept_video_datagram(peer_npub, payload).await
+                            {
+                                eprintln!("[video-runtime] frame-accept-error {err}");
+                            }
+                        });
+                    }
+                });
+                state
+                    .set_active_session(session_id.clone(), established_remote.clone())
+                    .await;
+                response["handoff"] = serde_json::to_value(handoff)?;
+                response["runtimeMode"] = json!("fips-video");
+                return Ok(response);
+            }
         }
 
         state

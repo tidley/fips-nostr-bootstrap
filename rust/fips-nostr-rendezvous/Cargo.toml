@@ -4,12 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "Core rendezvous protocol types and packet helpers for Nostr-signaled UDP NAT traversal"
 
+[features]
+default = []
+fips-handoff = ["dep:fips"]
+
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
 axum = "0.7"
 clap = { version = "4", features = ["derive"] }
-fips = { path = "../../../fips", default-features = false }
+fips = { path = "../../../../fips", default-features = false, optional = true }
 nostr = { version = "0.39", features = ["std", "nip59"] }
 nostr-sdk = "0.39"
 rand = "0.8"
