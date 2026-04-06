@@ -1372,8 +1372,20 @@ async fn api_events(State(state): State<Arc<AppState>>) -> impl axum::response::
     let initial = state.current_status_value().await;
     Sse::new(stream! {
         yield Ok::<SseEvent, std::convert::Infallible>(SseEvent::default().event("status").data(initial.to_string()));
-        while let Ok(envelope) = rx.recv().await {
-            yield Ok::<SseEvent, std::convert::Infallible>(SseEvent::default().event(envelope.event).data(envelope.data.to_string()));
+        loop {
+            match rx.recv().await {
+                Ok(envelope) => {
+                    yield Ok::<SseEvent, std::convert::Infallible>(
+                        SseEvent::default().event(envelope.event).data(envelope.data.to_string())
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
         }
     })
     .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keepalive"))
