@@ -9,11 +9,12 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use fips_nostr_rendezvous::{
     build_punch_packet, decode_session_frame, encode_session_frame, parse_punch_packet,
-    parse_stun_url, EndpointHint, LegacyEndpoint, LegacyHelloMessage, LegacyPunch,
-    LegacyServerInfoMessage, LegacyStunInfo, PunchPacketKind, SessionFrame, TraversalAdvert,
+    parse_stun_url, create_traversal_answer, plan_punch_targets, EndpointHint, LegacyEndpoint,
+    LegacyHelloMessage, LegacyPunch, LegacyServerInfoMessage, LegacyStunInfo, PunchHint,
+    PunchPacketKind, SessionFrame, TraversalAddress, TraversalAdvert, TraversalOffer,
     ADVERT_KIND, DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
 };
-use nostr::nips::nip59;
+use nostr::nips::{nip17, nip59};
 use nostr::nips::nip19::ToBech32;
 use nostr::{EventBuilder, Filter, Kind, Keys, PublicKey, RelayUrl, Tag, TagKind, Timestamp};
 use nostr_sdk::prelude::{Client, Options, RelayPoolNotification};
@@ -283,6 +284,7 @@ struct ServerState {
     pubkey: PublicKey,
     advert_relays: Vec<String>,
     dm_relays: Vec<String>,
+    inbox_lookup_relays: Vec<String>,
     trusted_npubs: HashSet<String>,
     stun_servers: Vec<String>,
     public_host: Option<String>,
@@ -401,6 +403,96 @@ impl ServerState {
         })
     }
 
+    async fn local_traversal_addresses(
+        &self,
+    ) -> Result<(Option<TraversalAddress>, Vec<TraversalAddress>)> {
+        let local_port = self.udp_socket.local_addr()?.port();
+        let observation = self.refresh_traversal_observation(false).await?;
+        let reflexive_address = observation
+            .as_ref()
+            .and_then(|obs| obs.reflexive_address.as_ref())
+            .map(|endpoint| TraversalAddress {
+                protocol: "udp".to_owned(),
+                ip: endpoint.host.clone(),
+                port: endpoint.port,
+            })
+            .or_else(|| {
+                self.public_host.as_ref().map(|host| TraversalAddress {
+                    protocol: "udp".to_owned(),
+                    ip: host.clone(),
+                    port: local_port,
+                })
+            });
+        let local_addresses = observation
+            .as_ref()
+            .map(|obs| {
+                obs.local_interface_addresses
+                    .iter()
+                    .map(|host| TraversalAddress {
+                        protocol: "udp".to_owned(),
+                        ip: host.clone(),
+                        port: obs.local_port,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                local_ipv4_hint()
+                    .map(|ip| {
+                        vec![TraversalAddress {
+                            protocol: "udp".to_owned(),
+                            ip: ip.to_string(),
+                            port: local_port,
+                        }]
+                    })
+                    .unwrap_or_default()
+            });
+        Ok((reflexive_address, local_addresses))
+    }
+
+    fn endpoint_from_traversal_address(address: &TraversalAddress) -> LegacyEndpoint {
+        LegacyEndpoint {
+            host: address.ip.clone(),
+            port: address.port,
+        }
+    }
+
+    fn select_remote_endpoint_from_offer(offer: &TraversalOffer) -> Option<LegacyEndpoint> {
+        offer
+            .reflexive_address
+            .as_ref()
+            .map(Self::endpoint_from_traversal_address)
+            .or_else(|| offer.local_addresses.first().map(Self::endpoint_from_traversal_address))
+    }
+
+    fn planned_remote_endpoints_from_offer_answer(
+        offer: &TraversalOffer,
+        answer_reflexive_address: Option<&TraversalAddress>,
+        answer_local_addresses: &[TraversalAddress],
+    ) -> Vec<LegacyEndpoint> {
+        let targets = plan_punch_targets(
+            answer_local_addresses,
+            answer_reflexive_address,
+            &offer.local_addresses,
+            offer.reflexive_address.as_ref(),
+        );
+        let mut remotes = Vec::new();
+        for target in targets {
+            let endpoint = Self::endpoint_from_traversal_address(&target.remote);
+            if !remotes
+                .iter()
+                .any(|existing: &LegacyEndpoint| existing.host == endpoint.host && existing.port == endpoint.port)
+            {
+                remotes.push(endpoint);
+            }
+        }
+        if remotes.is_empty() {
+            if let Some(endpoint) = Self::select_remote_endpoint_from_offer(offer) {
+                remotes.push(endpoint);
+            }
+        }
+        remotes
+    }
+
     async fn publish_advert(&self) -> Result<()> {
         let endpoint = self.resolve_traversal_endpoint().await?;
         let now = now_ms();
@@ -454,6 +546,61 @@ impl ServerState {
         Ok(())
     }
 
+    async fn find_recipient_inbox_relays(&self, target_pubkey: PublicKey) -> Result<Vec<String>> {
+        let filter = Filter::new()
+            .author(target_pubkey)
+            .kind(Kind::InboxRelays)
+            .since(Timestamp::from(
+                Timestamp::now().as_u64().saturating_sub(30 * 24 * 60 * 60),
+            ));
+        let events = match self
+            .client
+            .fetch_events_from(
+                self.inbox_lookup_relays.clone(),
+                filter,
+                Duration::from_millis(1_500),
+            )
+            .await
+        {
+            Ok(events) => events,
+            Err(_) => return Ok(self.dm_relays.clone()),
+        };
+        let mut newest: Option<nostr::Event> = None;
+        for event in events.iter() {
+            if newest
+                .as_ref()
+                .map(|current| event.created_at >= current.created_at)
+                .unwrap_or(true)
+            {
+                newest = Some(event.clone());
+            }
+        }
+        if let Some(event) = newest {
+            let relays = nip17::extract_relay_list(&event)
+                .map(|relay| relay.to_string())
+                .collect::<Vec<_>>();
+            if !relays.is_empty() {
+                return Ok(relays);
+            }
+        }
+        Ok(self.dm_relays.clone())
+    }
+
+    async fn preferred_dm_relays(&self, target_pubkey: PublicKey) -> Result<Vec<String>> {
+        let mut merged = Vec::new();
+        for relay in self.find_recipient_inbox_relays(target_pubkey).await? {
+            if !merged.contains(&relay) {
+                merged.push(relay);
+            }
+        }
+        for relay in &self.dm_relays {
+            if !merged.contains(relay) {
+                merged.push(relay.clone());
+            }
+        }
+        Ok(merged)
+    }
+
     async fn send_dm_to(&self, relays: Vec<String>, receiver: PublicKey, obj: &impl serde::Serialize, kind: &str) -> Result<()> {
         let content = serde_json::to_string(obj)?;
         let event = EventBuilder::private_msg(&self.keys, receiver, content, []).await?;
@@ -478,6 +625,41 @@ impl ServerState {
             while started.elapsed() < Duration::from_millis(duration_ms) {
                 let packet = build_punch_packet(PunchPacketKind::Probe, &session_id);
                 let _ = socket.send_to(&packet, target).await;
+                sleep(Duration::from_millis(interval_ms)).await;
+            }
+        });
+        Ok(())
+    }
+
+    async fn start_punch_plan(
+        &self,
+        session_id: String,
+        remotes: Vec<LegacyEndpoint>,
+        punch: LegacyPunch,
+    ) -> Result<()> {
+        if remotes.is_empty() {
+            return Ok(());
+        }
+        let socket = self.udp_socket.clone();
+        let targets = remotes
+            .iter()
+            .map(|remote| Ok(SocketAddr::new(remote.host.parse()?, remote.port)))
+            .collect::<Result<Vec<_>>>()?;
+        self.session_hashes
+            .lock()
+            .await
+            .insert(fips_nostr_rendezvous::session_hash(&session_id), session_id.clone());
+        let interval_ms = punch.interval_ms;
+        let duration_ms = punch.duration_ms;
+        let delay_ms = punch.start_at_ms.saturating_sub(now_ms());
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(delay_ms)).await;
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_millis(duration_ms) {
+                let packet = build_punch_packet(PunchPacketKind::Probe, &session_id);
+                for target in &targets {
+                    let _ = socket.send_to(&packet, target).await;
+                }
                 sleep(Duration::from_millis(interval_ms)).await;
             }
         });
@@ -748,6 +930,12 @@ async fn main() -> Result<()> {
         pubkey,
         advert_relays: args.advert_relays.clone(),
         dm_relays: args.dm_relays.clone(),
+        inbox_lookup_relays: {
+            let mut set = HashSet::new();
+            set.extend(args.advert_relays.iter().cloned());
+            set.extend(args.dm_relays.iter().cloned());
+            set.into_iter().collect()
+        },
         trusted_npubs: args.trusted_npubs.into_iter().filter(|v| !v.is_empty()).collect(),
         stun_servers: args.stun_servers.clone(),
         public_host: args.public_host.clone(),
@@ -893,6 +1081,86 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
+                if let Ok(offer) = serde_json::from_str::<TraversalOffer>(&rumor.content) {
+                    if offer.message_type == "offer"
+                        && offer.recipient_npub == notify_state.npub
+                        && offer.expires_at > now_ms()
+                    {
+                        let now = now_ms();
+                        let (reflexive_address, local_addresses) =
+                            notify_state.local_traversal_addresses().await?;
+                        let accepted =
+                            reflexive_address.is_some() || !local_addresses.is_empty();
+                        let punch = PunchHint {
+                            start_at_ms: now + notify_state.punch_start_delay_ms,
+                            interval_ms: notify_state.punch_interval_ms,
+                            duration_ms: notify_state.punch_duration_ms,
+                        };
+                        let answer = create_traversal_answer(
+                            offer.session_id.clone(),
+                            now,
+                            60_000,
+                            format!("{}-answer", offer.session_id),
+                            notify_state.npub.clone(),
+                            offer.sender_npub.clone(),
+                            offer.nonce.clone(),
+                            accepted,
+                            reflexive_address,
+                            local_addresses,
+                            accepted.then_some(punch.clone()),
+                            (!accepted).then_some("no-usable-addresses".to_owned()),
+                        );
+
+                        println!(
+                            "[rendezvous] offer received {}",
+                            serde_json::to_string(&json!({
+                                "fromNpub": from_npub,
+                                "sessionId": offer.session_id,
+                                "nonce": offer.nonce,
+                                "reflexiveAddress": offer.reflexive_address,
+                                "localAddresses": offer.local_addresses,
+                            }))?
+                        );
+
+                        let reply_relays = notify_state.preferred_dm_relays(sender).await?;
+                        notify_state
+                            .send_dm_to(reply_relays, sender, &answer, "answer")
+                            .await?;
+
+                        println!(
+                            "[rendezvous] answer published {}",
+                            serde_json::to_string(&json!({
+                                "toPubkey": sender.to_hex(),
+                                "sessionId": answer.session_id,
+                                "nonce": answer.nonce,
+                                "inReplyTo": answer.in_reply_to,
+                                "accepted": answer.accepted,
+                                "hasPunch": answer.punch.is_some(),
+                            }))?
+                        );
+
+                        if accepted {
+                            let remotes = ServerState::planned_remote_endpoints_from_offer_answer(
+                                &offer,
+                                answer.reflexive_address.as_ref(),
+                                &answer.local_addresses,
+                            );
+                            notify_state
+                                .start_punch_plan(
+                                    offer.session_id.clone(),
+                                    remotes,
+                                    LegacyPunch {
+                                        start_at_ms: punch.start_at_ms,
+                                        interval_ms: punch.interval_ms,
+                                        duration_ms: punch.duration_ms,
+                                    },
+                                )
+                                .await?;
+                        }
+                        continue;
+                    }
+                }
+
                 let hello: LegacyHelloMessage = match serde_json::from_str(&rumor.content) {
                     Ok(msg) => msg,
                     Err(_) => continue,
@@ -948,8 +1216,9 @@ async fn main() -> Result<()> {
                         }))?
                     );
 
+                let reply_relays = notify_state.preferred_dm_relays(sender).await?;
                 notify_state
-                    .send_dm_to(notify_state.dm_relays.clone(), sender, &reply, "server-info")
+                    .send_dm_to(reply_relays, sender, &reply, "server-info")
                     .await?;
 
                 println!(

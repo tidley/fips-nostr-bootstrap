@@ -13,9 +13,11 @@ use axum::{Json, Router};
 use clap::Parser;
 use fips_nostr_rendezvous::{
     build_punch_packet, decode_session_frame, encode_session_frame, parse_punch_packet,
-    parse_stun_url, LegacyEndpoint, LegacyHelloMessage, LegacyPunch, LegacyServerInfoMessage,
-    LegacyWants, PunchPacketKind, SessionFrame, TraversalAdvert, ADVERT_KIND,
-    DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
+    parse_stun_url, create_traversal_offer, plan_punch_targets,
+    validate_traversal_answer_for_offer, LegacyEndpoint, LegacyHelloMessage, LegacyPunch,
+    LegacyServerInfoMessage, LegacyWants, PunchPacketKind, SessionFrame, TraversalAddress,
+    TraversalAdvert, TraversalAnswer, TraversalOffer, ADVERT_KIND, DEFAULT_ADVERT_RELAYS,
+    DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
 };
 use nostr::nips::nip17;
 use nostr::nips::nip19::ToBech32;
@@ -330,6 +332,7 @@ struct AppState {
     stun_observation: RwLock<Option<StunObservation>>,
     stun_observed_at: Mutex<Option<Instant>>,
     advert_cache: RwLock<HashMap<String, TraversalAdvert>>,
+    pending_answer: Mutex<HashMap<String, oneshot::Sender<TraversalAnswer>>>,
     pending_server_info: Mutex<HashMap<String, oneshot::Sender<LegacyServerInfoMessage>>>,
     pending_punch: Mutex<HashMap<String, oneshot::Sender<LegacyEndpoint>>>,
     punch_hashes: Mutex<HashMap<[u8; 16], String>>,
@@ -446,6 +449,52 @@ impl AppState {
         })
     }
 
+    async fn local_traversal_addresses(
+        &self,
+    ) -> Result<(Option<TraversalAddress>, Vec<TraversalAddress>)> {
+        let local_port = self.udp_socket.local_addr()?.port();
+        let observation = self.refresh_traversal_observation(false).await?;
+        let reflexive_address = observation
+            .as_ref()
+            .and_then(|obs| obs.reflexive_address.as_ref())
+            .map(|endpoint| TraversalAddress {
+                protocol: "udp".to_owned(),
+                ip: endpoint.host.clone(),
+                port: endpoint.port,
+            })
+            .or_else(|| {
+                self.public_host.as_ref().map(|host| TraversalAddress {
+                    protocol: "udp".to_owned(),
+                    ip: host.clone(),
+                    port: local_port,
+                })
+            });
+        let local_addresses = observation
+            .as_ref()
+            .map(|obs| {
+                obs.local_interface_addresses
+                    .iter()
+                    .map(|host| TraversalAddress {
+                        protocol: "udp".to_owned(),
+                        ip: host.clone(),
+                        port: obs.local_port,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                local_ipv4_hint()
+                    .map(|ip| {
+                        vec![TraversalAddress {
+                            protocol: "udp".to_owned(),
+                            ip: ip.to_string(),
+                            port: local_port,
+                        }]
+                    })
+                    .unwrap_or_default()
+            });
+        Ok((reflexive_address, local_addresses))
+    }
+
     async fn publish_inbox_relays(&self) -> Result<()> {
         let tags = self
             .dm_relays
@@ -558,6 +607,32 @@ impl AppState {
         Ok(self.dm_relays.clone())
     }
 
+    async fn preferred_dm_relays(
+        &self,
+        target_pubkey: PublicKey,
+        advert: Option<&TraversalAdvert>,
+    ) -> Result<Vec<String>> {
+        let mut merged = Vec::new();
+        for relay in self.find_recipient_inbox_relays(target_pubkey).await? {
+            if !merged.contains(&relay) {
+                merged.push(relay);
+            }
+        }
+        if let Some(advert) = advert {
+            for relay in &advert.relays {
+                if !merged.contains(relay) {
+                    merged.push(relay.clone());
+                }
+            }
+        }
+        for relay in &self.dm_relays {
+            if !merged.contains(relay) {
+                merged.push(relay.clone());
+            }
+        }
+        Ok(merged)
+    }
+
     async fn send_hello(
         &self,
         relays: Vec<String>,
@@ -621,6 +696,116 @@ impl AppState {
         }
     }
 
+    async fn send_offer(
+        &self,
+        relays: Vec<String>,
+        target_pubkey: PublicKey,
+        target_npub: String,
+    ) -> Result<(TraversalOffer, TraversalAnswer, Option<TraversalAdvert>)> {
+        let discovered_advert = self.find_advertised_peer(&target_npub).await?;
+        let (reflexive_address, local_addresses) = self.local_traversal_addresses().await?;
+        let session_id = nonce();
+        let offer = create_traversal_offer(
+            session_id.clone(),
+            now_ms(),
+            60_000,
+            session_id.clone(),
+            self.npub.clone(),
+            target_npub.clone(),
+            reflexive_address,
+            local_addresses,
+        );
+        println!(
+            "[rendezvous] offer prepared {}",
+            serde_json::to_string(&json!({
+                "targetNpub": target_npub,
+                "sessionId": offer.session_id,
+                "nonce": offer.nonce,
+                "reflexiveAddress": offer.reflexive_address,
+                "localAddresses": offer.local_addresses,
+                "relays": relays,
+                "discoveredAdvertRelays": discovered_advert.as_ref().map(|advert| advert.relays.clone()),
+            }))
+            .unwrap_or_else(|_| "{\"kind\":\"log-error\"}".to_owned())
+        );
+
+        let (tx, mut rx) = oneshot::channel();
+        self.pending_answer
+            .lock()
+            .await
+            .insert(offer.nonce.clone(), tx);
+
+        let start = Instant::now();
+        let wait_ms = 15_000u64;
+        let retry_ms = 3_000u64;
+        loop {
+            let event = EventBuilder::private_msg(
+                &self.keys,
+                target_pubkey,
+                serde_json::to_string(&offer)?,
+                [Tag::public_key(target_pubkey)],
+            )
+            .await?;
+            let _ = self.client.send_event_to(relays.clone(), event).await?;
+            match timeout(Duration::from_millis(retry_ms), &mut rx).await {
+                Ok(Ok(answer)) => {
+                    validate_traversal_answer_for_offer(&offer, &answer, now_ms())
+                        .map_err(|reason| anyhow!("invalid traversal answer: {reason}"))?;
+                    return Ok((offer, answer, discovered_advert));
+                }
+                Ok(Err(_)) => return Err(anyhow!("pending answer channel closed")),
+                Err(_) if start.elapsed() >= Duration::from_millis(wait_ms) => {
+                    self.pending_answer.lock().await.remove(&offer.nonce);
+                    return Err(anyhow!("timed out waiting for traversal answer"));
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn endpoint_from_traversal_address(address: &TraversalAddress) -> LegacyEndpoint {
+        LegacyEndpoint {
+            host: address.ip.clone(),
+            port: address.port,
+        }
+    }
+
+    fn select_remote_endpoint_from_answer(answer: &TraversalAnswer) -> Option<LegacyEndpoint> {
+        answer
+            .reflexive_address
+            .as_ref()
+            .map(Self::endpoint_from_traversal_address)
+            .or_else(|| answer.local_addresses.first().map(Self::endpoint_from_traversal_address))
+    }
+
+    fn planned_remote_endpoints_from_offer_answer(
+        offer: &TraversalOffer,
+        answer: &TraversalAnswer,
+    ) -> Vec<LegacyEndpoint> {
+        let targets = plan_punch_targets(
+            &offer.local_addresses,
+            offer.reflexive_address.as_ref(),
+            &answer.local_addresses,
+            answer.reflexive_address.as_ref(),
+        );
+        let mut remotes = Vec::new();
+        for target in targets {
+            let endpoint = Self::endpoint_from_traversal_address(&target.remote);
+            if !remotes
+                .iter()
+                .any(|existing: &LegacyEndpoint| existing.host == endpoint.host && existing.port == endpoint.port)
+            {
+                remotes.push(endpoint);
+            }
+        }
+        if remotes.is_empty() {
+            if let Some(endpoint) = Self::select_remote_endpoint_from_answer(answer) {
+                remotes.push(endpoint);
+            }
+        }
+        remotes
+    }
+
     async fn start_punch_and_wait(
         &self,
         session_id: String,
@@ -645,6 +830,49 @@ impl AppState {
             while started.elapsed() < Duration::from_millis(duration_ms) {
                 let packet = build_punch_packet(PunchPacketKind::Probe, &session_id);
                 let _ = socket.send_to(&packet, remote_addr).await;
+                sleep(Duration::from_millis(interval_ms)).await;
+            }
+        });
+
+        let remote = timeout(Duration::from_millis(duration_ms + 5_000), rx)
+            .await
+            .context("timed out waiting for UDP hole punch")?
+            .map_err(|_| anyhow!("punch channel dropped"))?;
+        Ok(remote)
+    }
+
+    async fn start_punch_plan_and_wait(
+        &self,
+        session_id: String,
+        remotes: Vec<LegacyEndpoint>,
+        punch: LegacyPunch,
+    ) -> Result<LegacyEndpoint> {
+        if remotes.is_empty() {
+            return Err(anyhow!("no punch targets planned"));
+        }
+        let remote_addrs = remotes
+            .iter()
+            .map(|remote| Ok(SocketAddr::new(remote.host.parse()?, remote.port)))
+            .collect::<Result<Vec<_>>>()?;
+        let (tx, rx) = oneshot::channel();
+        self.pending_punch.lock().await.insert(session_id.clone(), tx);
+        self.punch_hashes
+            .lock()
+            .await
+            .insert(fips_nostr_rendezvous::session_hash(&session_id), session_id.clone());
+
+        let socket = self.udp_socket.clone();
+        let delay_ms = punch.start_at_ms.saturating_sub(now_ms());
+        let interval_ms = punch.interval_ms;
+        let duration_ms = punch.duration_ms;
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(delay_ms)).await;
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_millis(duration_ms) {
+                let packet = build_punch_packet(PunchPacketKind::Probe, &session_id);
+                for remote in &remote_addrs {
+                    let _ = socket.send_to(&packet, remote).await;
+                }
                 sleep(Duration::from_millis(interval_ms)).await;
             }
         });
@@ -753,35 +981,73 @@ async fn api_connect(
             nostr::nips::nip19::Nip19::Pubkey(pubkey) => pubkey,
             _ => return Err(anyhow!("target must be npub")),
         };
-        let dm_relays = if let Some(advert) = discovered_advert.as_ref() {
-            if advert.relays.is_empty() {
-                state.find_recipient_inbox_relays(target_pubkey).await?
-            } else {
-                advert.relays.clone()
-            }
-        } else {
-            state.find_recipient_inbox_relays(target_pubkey).await?
-        };
+        let dm_relays = state
+            .preferred_dm_relays(target_pubkey, discovered_advert.as_ref())
+            .await?;
 
-        let (reply, discovered_advert) = state
-            .send_hello(dm_relays, target_pubkey, target_npub.clone())
-            .await?;
-        let remote = reply.endpoint.clone();
-        let punch = reply.punch.clone().unwrap_or(LegacyPunch {
-            start_at_ms: now_ms() + state.punch_start_delay_ms,
-            interval_ms: state.punch_interval_ms,
-            duration_ms: state.punch_duration_ms,
-        });
-        let established_remote = state
-            .start_punch_and_wait(reply.nonce.clone(), remote.clone(), punch)
-            .await?;
+        let (session_id, discovered_advert, established_remote) =
+            match state.send_offer(dm_relays.clone(), target_pubkey, target_npub.clone()).await {
+                Ok((offer, answer, discovered_advert)) => {
+                    if !answer.accepted {
+                        return Err(anyhow!(
+                            "{}",
+                            answer
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "traversal answer rejected".to_owned())
+                        ));
+                    }
+                    let remotes = AppState::planned_remote_endpoints_from_offer_answer(&offer, &answer);
+                    let punch = answer
+                        .punch
+                        .clone()
+                        .map(|punch| LegacyPunch {
+                            start_at_ms: punch.start_at_ms,
+                            interval_ms: punch.interval_ms,
+                            duration_ms: punch.duration_ms,
+                        })
+                        .unwrap_or(LegacyPunch {
+                            start_at_ms: now_ms() + state.punch_start_delay_ms,
+                            interval_ms: state.punch_interval_ms,
+                            duration_ms: state.punch_duration_ms,
+                        });
+                    let established_remote = state
+                        .start_punch_plan_and_wait(offer.session_id.clone(), remotes, punch)
+                        .await?;
+                    (offer.session_id, discovered_advert, established_remote)
+                }
+                Err(offer_err) => {
+                    println!(
+                        "[web-daemon] offer fallback {}",
+                        serde_json::to_string(&json!({
+                            "target": target_npub,
+                            "error": offer_err.to_string(),
+                            "fallback": "legacy-hello",
+                        }))
+                        .unwrap_or_default()
+                    );
+                    let (reply, discovered_advert) = state
+                        .send_hello(dm_relays, target_pubkey, target_npub.clone())
+                        .await?;
+                    let remote = reply.endpoint.clone();
+                    let punch = reply.punch.clone().unwrap_or(LegacyPunch {
+                        start_at_ms: now_ms() + state.punch_start_delay_ms,
+                        interval_ms: state.punch_interval_ms,
+                        duration_ms: state.punch_duration_ms,
+                    });
+                    let established_remote = state
+                        .start_punch_and_wait(reply.nonce.clone(), remote, punch)
+                        .await?;
+                    (reply.nonce, discovered_advert, established_remote)
+                }
+            };
         state
-            .set_active_session(reply.nonce.clone(), established_remote.clone())
+            .set_active_session(session_id.clone(), established_remote.clone())
             .await;
 
         Ok(json!({
             "ok": true,
-            "sessionId": reply.nonce,
+            "sessionId": session_id,
             "remote": established_remote,
             "discovered": discovered_advert.is_some(),
             "discoveredAdvert": discovered_advert,
@@ -916,6 +1182,7 @@ async fn main() -> Result<()> {
         stun_observation: RwLock::new(None),
         stun_observed_at: Mutex::new(None),
         advert_cache: RwLock::new(HashMap::new()),
+        pending_answer: Mutex::new(HashMap::new()),
         pending_server_info: Mutex::new(HashMap::new()),
         pending_punch: Mutex::new(HashMap::new()),
         punch_hashes: Mutex::new(HashMap::new()),
@@ -994,6 +1261,14 @@ async fn main() -> Result<()> {
                     if let Ok(unwrapped) = nip59::extract_rumor(&notify_state.keys, &event).await {
                         if unwrapped.rumor.kind != Kind::PrivateDirectMessage {
                             continue;
+                        }
+                        if let Ok(msg) = serde_json::from_str::<TraversalAnswer>(&unwrapped.rumor.content) {
+                            if msg.message_type == "answer" {
+                                if let Some(tx) = notify_state.pending_answer.lock().await.remove(&msg.in_reply_to) {
+                                    let _ = tx.send(msg);
+                                    continue;
+                                }
+                            }
                         }
                         if let Ok(msg) = serde_json::from_str::<LegacyServerInfoMessage>(&unwrapped.rumor.content) {
                             if msg.message_type == "fips.rendezvous.server-info" {
