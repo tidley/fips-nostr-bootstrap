@@ -2,211 +2,205 @@
 
 Prototype workspace for Nostr-signaled NAT traversal and bootstrap toward upstream FIPS integration.
 
-The repo is intentionally mixed. It contains:
-- a TypeScript package and test suite for rendezvous, adverts, signaling, STUN handling, and UDP punch orchestration
-- runnable Node `.mjs` apps for web/CLI demos
-- a Rust functional runtime that is starting to replace the JS server side
-- a Rust bootstrap client
-- mobile, Android, and browser demo experiments
-- docs, specs, runbooks, and planning material
+This repo is now best treated as a traversal/bootstrap lab with a working Rust demo path. It proves:
+- advert publication and discovery over Nostr
+- `kind 10050` inbox relay publication and lookup
+- STUN-driven reflexive address discovery
+- NIP-17/NIP-59 private signaling
+- Rust `offer` / `answer` signaling with legacy `hello -> server-info` fallback
+- binary UDP punch / ack packets
+- a Rust shell demo over the punched path
+
+It does **not** yet contain the real downstream FIPS transport handoff. That is the next phase and likely belongs in a branch of the upstream FIPS repo.
 
 In this repo, "FIPS" means alignment with the upstream FIPS transport/bootstrap direction. It is not a FIPS 140 validation claim.
 
-## Current status
+## Current State
 
-What works today:
-- public traversal adverts over Nostr
-- advert discovery without pre-known peer identity
-- private NIP-17/NIP-59 signaling
-- STUN-assisted address observation
-- UDP hole punching with binary probe/ack packets
-- a working shell demo over the punched UDP path
-- a Rust shell server and a Rust web daemon behind the `.mjs` web UI
+What is actually used now:
+- Rust runtime for the functional path:
+  - [lib.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/lib.rs)
+  - [fips-shell-server.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-shell-server.rs)
+  - [fips-web-daemon.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-web-daemon.rs)
+- Thin Node UI/process wrapper:
+  - [fips-web-console.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-web-console.mjs)
+- TypeScript protocol/planner/testbed:
+  - [src/traversal_runtime.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_runtime.ts)
+  - [src/traversal_signal.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_signal.ts)
+  - [src/punch_planner.ts](/home/tom/code/fips-nostr-bootstrap/src/punch_planner.ts)
+  - [src/traversal_flow.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_flow.ts)
 
-What is still incomplete:
-- full upstream FIPS handoff
-- Rust `offer/answer` parity with the richer JS traversal path
-- full live public-relay reliability hardening
-- final transport policy/fallback story for upstream FIPS
+What still exists mainly as reference or compatibility:
+- JS runtime package:
+  - [packages/fips-nostr-rendezvous/src/index.ts](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/src/index.ts)
+- legacy `hello -> server-info` signaling in both JS and Rust runtimes
+- demo `FIPS1` session framing rather than a real FIPS transport handoff
 
-## Main directories
+What is still missing:
+- handoff of an established punched UDP path into the actual FIPS transport/session layer
+- final per-peer socket ownership decision for the handoff boundary
+- transport startup on top of the punched socket
+- production-grade public relay hardening and failure policy
 
-### `src/`
-
-TypeScript core modules and the main Vitest suite.
-
-This is where most of the protocol and runtime logic is modeled and tested:
-- traversal adverts
-- offer/answer signaling
-- STUN normalization
-- punch planning
-- relay/test harnesses
-- runtime simulations and integration tests
-
-### `packages/fips-nostr-rendezvous/`
-
-Reusable TS package for the current JS runtime path.
-
-It contains:
-- `src/index.ts` as the package source of truth
-- generated runtime JS used by the `.mjs` apps
-- the current JS rendezvous node implementation
-
-See [packages/fips-nostr-rendezvous/README.md](/home/tom/code/fips-nostr-bootstrap/packages/fips-nostr-rendezvous/README.md).
-
-### `apps/`
-
-Runnable Node entry points built on the package:
-- [apps/fips-web-console.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-web-console.mjs)
-- [apps/fips-shell-server.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-shell-server.mjs)
-- [apps/fips-daemon.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-daemon.mjs)
-- [apps/fips-pty-client.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-pty-client.mjs)
-- [apps/fips-pty-server.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-pty-server.mjs)
-- [apps/fips-combo-client.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-combo-client.mjs)
-- [apps/fips-video-chat.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-video-chat.mjs)
-
-These are useful as demo surfaces and integration targets, not just examples.
+## Folder Guide
 
 ### `rust/fips-nostr-rendezvous/`
 
-Rust runtime/protocol crate for the functional migration.
+Primary functional implementation now.
 
-Current scope:
-- protocol types and packet helpers
-- legacy `hello -> server-info` wire structs
-- `FIPS1` session frame helpers
-- long-running Rust shell server binary
-- Rust web daemon used by the web console client path
+Important files:
+- [lib.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/lib.rs)
+  - shared protocol structs
+  - binary punch packet helpers
+  - traversal offer/answer helpers
+  - punch planning helpers
+  - Rust NAT/planner tests
+- [fips-shell-server.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-shell-server.rs)
+  - long-running advertised server
+  - STUN observation
+  - advert publication
+  - inbox relay publication
+  - Rust offer/answer responder
+  - legacy fallback responder
+  - UDP punch responder
+  - shell demo server
+- [fips-web-daemon.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-web-daemon.rs)
+  - Rust client/daemon
+  - advert discovery
+  - `kind 10050`-first relay routing
+  - Rust offer initiator
+  - legacy fallback initiator
+  - UDP punch initiator
+  - HTTP/SSE API for the web UI
 
-See [rust/fips-nostr-rendezvous/README.md](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/README.md).
+### `apps/`
+
+Demo/UI/process glue.
+
+Important files:
+- [fips-web-console.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-web-console.mjs)
+  - browser UI
+  - spawns and proxies the Rust web daemon
+  - not part of the core traversal logic
+- [fips-shell-server.mjs](/home/tom/code/fips-nostr-bootstrap/apps/fips-shell-server.mjs)
+  - older Node server path
+  - useful for interop and regression checks
+
+### `src/`
+
+TypeScript reference implementation and main test harness.
+
+Important files:
+- [traversal_signal.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_signal.ts)
+  - offer/answer schema and validation
+- [punch_planner.ts](/home/tom/code/fips-nostr-bootstrap/src/punch_planner.ts)
+  - target ordering
+  - punch window negotiation
+  - retry schedule generation
+- [traversal_runtime.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_runtime.ts)
+  - pure composition of STUN -> signaling -> punch planning
+- [traversal_flow.ts](/home/tom/code/fips-nostr-bootstrap/src/traversal_flow.ts)
+  - pure bootstrap scenario modeling
+- [embedded_relay.ts](/home/tom/code/fips-nostr-bootstrap/src/embedded_relay.ts)
+  - local relay used by integration tests
+
+This directory remains the easiest place to reason about protocol behavior before porting or refining it in Rust.
+
+### `packages/fips-nostr-rendezvous/`
+
+Older JS library/runtime path.
+
+Still useful for:
+- interop
+- reference behavior
+- demo compatibility
+
+Not the preferred place for new functional work.
 
 ### `rust/bootstrap-client/`
 
-Rust bootstrap client for:
-- sending `fips.rendezvous.hello`
-- receiving `fips.rendezvous.server-info`
-- optional punch probing
-- writing handoff JSON for downstream startup
+Older Rust bootstrap helper built around legacy `hello -> server-info`.
 
-See [rust/bootstrap-client/README.md](/home/tom/code/fips-nostr-bootstrap/rust/bootstrap-client/README.md).
+Still useful as a reference for:
+- handoff JSON shape
+- bootstrap-only flows
 
-### `mobile/` and `android/`
+Not the primary runtime path anymore.
 
-Client packaging experiments:
-- [mobile/flutter_fips_client](/home/tom/code/fips-nostr-bootstrap/mobile/flutter_fips_client)
-- [android/fips-termux-wrapper](/home/tom/code/fips-nostr-bootstrap/android/fips-termux-wrapper)
+### `docs/`, `spec/`, `.planning/`
 
-These are useful context, but they are not yet the center of gravity.
+Reference material, architecture notes, protocol notes, and work tracking.
 
-### `docs/`, `spec/`, `demo/`, `.planning/`
+## Working Demo Path
 
-These contain:
-- architecture and protocol docs
-- runbooks and security/operations notes
-- demo scenarios
-- roadmap/status/todo material
+Known-good internet demo profile:
+- advert relays: `wss://offchain.pub,wss://strfry.bitsbytom.com`
+- DM relays: `wss://nip17.com,wss://offchain.pub`
+- STUN servers: `stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302`
 
-Useful starting points:
-- [docs/ARCHITECTURE.md](/home/tom/code/fips-nostr-bootstrap/docs/ARCHITECTURE.md)
-- [docs/FIPS-PARITY.md](/home/tom/code/fips-nostr-bootstrap/docs/FIPS-PARITY.md)
-- [docs/PROTOCOLS.md](/home/tom/code/fips-nostr-bootstrap/docs/PROTOCOLS.md)
-- [docs/PRODUCTION-RUNBOOK.md](/home/tom/code/fips-nostr-bootstrap/docs/PRODUCTION-RUNBOOK.md)
-
-### `tools/stun-lite/`
-
-Small Go STUN server for local binding tests and diagnostics.
-
-## Quick start
-
-Install and run the TS/JS side:
-
-```bash
-npm install
-npm run build
-npm test
-```
-
-Useful Node entry points:
-
-```bash
-node apps/fips-web-console.mjs
-node apps/fips-shell-server.mjs
-node apps/fips-daemon.mjs
-node scripts/demo.mjs happy
-```
-
-Build and test the Rust runtime crate:
-
-```bash
-cd rust/fips-nostr-rendezvous
-cargo test
-```
-
-Run the known-good Rust demo profile:
-
+Server:
 
 ```bash
 cd /home/tom/code/fips-nostr-bootstrap && \
 FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
 cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
-  --nsec "nsec1xcyh66j3q8ydq8h5deyamcwk2fxpvpyvh49mqeeux3agqcf23r9qwjg364" \
-  --udp-port 9999 \
-  --advert-relays 'wss://offchain.pub' \
-  --dm-relays 'wss://nip17.com,wss://offchain.pub'
-```
-
-FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
-cargo run --manifest-path rust/fips-nostr-rendezvous/Cargo.toml --bin fips-shell-server -- \
-  --nsec 'nsec1xcyh66j3q8ydq8h5deyamcwk2fxpvpyvh49mqeeux3agqcf23r9qwjg364' \
+  --nsec '<SERVER_NSEC>' \
   --udp-port 9999 \
   --advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'
+```
 
-
-
-Run the Rust-backed web console client:
+Client:
 
 ```bash
 cd /home/tom/code/fips-nostr-bootstrap && \
 FIPS_STUN_SERVERS='stun:fips.tomdwyer.uk:3478,stun:stun.l.google.com:19302' \
-NOSTR_NSEC="nsec196t2fum4wcq0aqvlp0f04mfayetffcmd5fcj0d0su3xp5f8pwyys4f079c" \
+NOSTR_NSEC='<CLIENT_NSEC>' \
 node apps/fips-web-console.mjs \
-  --advert-relays 'wss://offchain.pub' \
+  --advert-relays 'wss://offchain.pub,wss://strfry.bitsbytom.com' \
   --dm-relays 'wss://nip17.com,wss://offchain.pub'
 ```
 
-Build and test the Rust bootstrap client:
+## Tests That Matter Most
+
+Rust crate tests:
 
 ```bash
-cd rust/bootstrap-client
+cd /home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous
 cargo test
 ```
 
-## Recommended mental model
+Key integration tests:
 
-Treat this repo as a bootstrap/traversal lab, not a single polished product.
+```bash
+cd /home/tom/code/fips-nostr-bootstrap
+npm test -- src/rust_offer_answer.integration.test.ts
+npm test -- src/rust_shell_server.integration.test.ts
+npm test -- src/rust_runtime_stun_startup.integration.test.ts
+npm test -- src/nat_traversal_simulation.integration.test.ts
+```
 
-The practical split right now is:
-- TS/JS still provides UI/test harness surface
-- Rust now carries the working shell server path and the web-console client/daemon path
-- both coexist while the functional side is migrated toward Rust
+What these cover:
+- Rust offer/answer path
+- Rust shell server end-to-end interop
+- startup STUN correctness in Rust binaries
+- simulated LAN preference and symmetric NAT fallback behavior
 
-## Verification
+## Next Logical Steps
 
-The repo currently uses:
-- `vitest` for TypeScript/unit/integration coverage
-- embedded relay integration tests for JS and JS/Rust interop
-- `cargo test` for the Rust crates
+This repo is now at the point where the next major work should likely happen in a branch of the upstream FIPS repo.
 
-Notable current interop proof:
-- the Rust shell server can publish adverts, receive gift-wrapped DMs, establish a punched session, and serve shell commands to the Rust web daemon behind the current web UI
+Recommended order:
+1. Define the FIPS handoff boundary.
+   - established UDP socket ownership
+   - peer/session metadata
+   - timeout/cleanup semantics
+2. Move or port the proven Rust rendezvous core into a FIPS branch.
+3. Replace demo `FIPS1` frames with the real FIPS transport/session startup.
+4. Decide and implement per-peer socket ownership for the post-punch transport boundary.
+5. Add end-to-end tests that prove:
+   - punch success
+   - FIPS transport startup
+   - first authenticated transport message
 
-## Bottom line
-
-This repository contains real working traversal/bootstrap code, but it is still a convergence workspace.
-
-If you want the shortest description:
-- Nostr for discovery/signaling
-- STUN for endpoint observation
-- UDP punch for direct path establishment
-- eventual FIPS transport integration as the target end state
+This repo should remain the lab/reference environment while that integration is happening.

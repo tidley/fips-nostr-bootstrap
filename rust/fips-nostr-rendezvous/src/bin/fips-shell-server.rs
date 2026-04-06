@@ -7,16 +7,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use fips_nostr_rendezvous::fips_handoff::handoff_established_traversal;
 use fips_nostr_rendezvous::{
-    build_punch_packet, decode_session_frame, encode_session_frame, parse_punch_packet,
-    parse_stun_url, create_traversal_answer, plan_punch_targets, EndpointHint, LegacyEndpoint,
+    build_punch_packet, create_traversal_answer, decode_session_frame, encode_session_frame,
+    parse_punch_packet, parse_stun_url, plan_punch_targets, EndpointHint, LegacyEndpoint,
     LegacyHelloMessage, LegacyPunch, LegacyServerInfoMessage, LegacyStunInfo, PunchHint,
-    PunchPacketKind, SessionFrame, TraversalAddress, TraversalAdvert, TraversalOffer,
-    ADVERT_KIND, DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
+    PunchPacketKind, SessionFrame, TraversalAddress, TraversalAdvert, TraversalOffer, ADVERT_KIND,
+    DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
 };
-use nostr::nips::{nip17, nip59};
 use nostr::nips::nip19::ToBech32;
-use nostr::{EventBuilder, Filter, Kind, Keys, PublicKey, RelayUrl, Tag, TagKind, Timestamp};
+use nostr::nips::{nip17, nip59};
+use nostr::{EventBuilder, Filter, Keys, Kind, PublicKey, RelayUrl, Tag, TagKind, Timestamp};
 use nostr_sdk::prelude::{Client, Options, RelayPoolNotification};
 use rand::random;
 use serde_json::{json, Value};
@@ -28,7 +29,10 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio::time::{sleep, timeout, Instant};
 
 #[derive(Debug, Parser)]
-#[command(name = "fips-shell-server-rs", about = "Rust FIPS shell server over Nostr rendezvous")]
+#[command(
+    name = "fips-shell-server-rs",
+    about = "Rust FIPS shell server over Nostr rendezvous"
+)]
 struct Args {
     #[arg(long)]
     nsec: String,
@@ -50,18 +54,30 @@ struct Args {
 
     #[arg(long)]
     public_host: Option<String>,
+
+    #[arg(long, default_value_t = false)]
+    handoff_fips: bool,
 }
 
 fn default_advert_relays() -> Vec<String> {
-    DEFAULT_ADVERT_RELAYS.iter().map(|relay| relay.to_string()).collect()
+    DEFAULT_ADVERT_RELAYS
+        .iter()
+        .map(|relay| relay.to_string())
+        .collect()
 }
 
 fn default_dm_relays() -> Vec<String> {
-    DEFAULT_DM_RELAYS.iter().map(|relay| relay.to_string()).collect()
+    DEFAULT_DM_RELAYS
+        .iter()
+        .map(|relay| relay.to_string())
+        .collect()
 }
 
 fn default_stun_servers() -> Vec<String> {
-    DEFAULT_STUN_SERVERS.iter().map(|server| server.to_string()).collect()
+    DEFAULT_STUN_SERVERS
+        .iter()
+        .map(|server| server.to_string())
+        .collect()
 }
 
 fn parse_csv_env_list(name: &str) -> Option<Vec<String>> {
@@ -222,7 +238,12 @@ fn log_traversal_observation(role: &str, observation: Option<&StunObservation>) 
     }
 }
 
-fn log_stun_attempt(role: &str, stun_url: &str, local_port: u16, local_interface_addresses: &[String]) {
+fn log_stun_attempt(
+    role: &str,
+    stun_url: &str,
+    local_port: u16,
+    local_interface_addresses: &[String],
+) {
     println!(
         "[traversal] stun-attempt {}",
         serde_json::to_string(&json!({
@@ -280,6 +301,7 @@ struct ServerState {
     client: Client,
     udp_socket: Arc<UdpSocket>,
     keys: Keys,
+    resolved_nsec: String,
     npub: String,
     pubkey: PublicKey,
     advert_relays: Vec<String>,
@@ -300,6 +322,9 @@ struct ServerState {
     stun_observed_at: Mutex<Option<Instant>>,
     sessions: Mutex<HashMap<String, Arc<Mutex<SessionState>>>>,
     session_hashes: Mutex<HashMap<[u8; 16], String>>,
+    pending_handoffs: Mutex<HashMap<String, String>>,
+    handoff_fips: bool,
+    handoff_socket: Mutex<Option<std::net::UdpSocket>>,
 }
 
 impl ServerState {
@@ -327,7 +352,13 @@ impl ServerState {
             log_stun_attempt("server", server, local_port, &local_addresses);
             match self.probe_stun_server(server).await {
                 Ok(reflexive) => {
-                    log_stun_result("server", server, local_port, &local_addresses, Ok(&reflexive));
+                    log_stun_result(
+                        "server",
+                        server,
+                        local_port,
+                        &local_addresses,
+                        Ok(&reflexive),
+                    );
                     let obs = StunObservation {
                         server: server.clone(),
                         reflexive_address: Some(reflexive),
@@ -365,7 +396,12 @@ impl ServerState {
         self.udp_socket
             .send_to(&request, format!("{}:{}", endpoint.host, endpoint.port))
             .await
-            .with_context(|| format!("failed to send STUN request to {}:{}", endpoint.host, endpoint.port))?;
+            .with_context(|| {
+                format!(
+                    "failed to send STUN request to {}:{}",
+                    endpoint.host, endpoint.port
+                )
+            })?;
 
         let mapped = timeout(Duration::from_millis(self.stun_timeout_ms), rx)
             .await
@@ -461,7 +497,12 @@ impl ServerState {
             .reflexive_address
             .as_ref()
             .map(Self::endpoint_from_traversal_address)
-            .or_else(|| offer.local_addresses.first().map(Self::endpoint_from_traversal_address))
+            .or_else(|| {
+                offer
+                    .local_addresses
+                    .first()
+                    .map(Self::endpoint_from_traversal_address)
+            })
     }
 
     fn planned_remote_endpoints_from_offer_answer(
@@ -478,10 +519,9 @@ impl ServerState {
         let mut remotes = Vec::new();
         for target in targets {
             let endpoint = Self::endpoint_from_traversal_address(&target.remote);
-            if !remotes
-                .iter()
-                .any(|existing: &LegacyEndpoint| existing.host == endpoint.host && existing.port == endpoint.port)
-            {
+            if !remotes.iter().any(|existing: &LegacyEndpoint| {
+                existing.host == endpoint.host && existing.port == endpoint.port
+            }) {
                 remotes.push(endpoint);
             }
         }
@@ -535,9 +575,16 @@ impl ServerState {
             .dm_relays
             .iter()
             .filter_map(|relay| RelayUrl::parse(relay).ok())
-            .map(|relay| Tag::custom(TagKind::SingleLetter(nostr::SingleLetterTag::lowercase(nostr::Alphabet::R)), [relay.to_string()]))
+            .map(|relay| {
+                Tag::custom(
+                    TagKind::SingleLetter(nostr::SingleLetterTag::lowercase(nostr::Alphabet::R)),
+                    [relay.to_string()],
+                )
+            })
             .collect::<Vec<_>>();
-        let event = EventBuilder::new(Kind::InboxRelays, "").tags(relay_tags).sign_with_keys(&self.keys)?;
+        let event = EventBuilder::new(Kind::InboxRelays, "")
+            .tags(relay_tags)
+            .sign_with_keys(&self.keys)?;
         let output = self
             .client
             .send_event_to(self.dm_relays.clone(), event)
@@ -601,7 +648,13 @@ impl ServerState {
         Ok(merged)
     }
 
-    async fn send_dm_to(&self, relays: Vec<String>, receiver: PublicKey, obj: &impl serde::Serialize, kind: &str) -> Result<()> {
+    async fn send_dm_to(
+        &self,
+        relays: Vec<String>,
+        receiver: PublicKey,
+        obj: &impl serde::Serialize,
+        kind: &str,
+    ) -> Result<()> {
         let content = serde_json::to_string(obj)?;
         let event = EventBuilder::private_msg(&self.keys, receiver, content, []).await?;
         let output = self.client.send_event_to(relays, event).await?;
@@ -609,13 +662,18 @@ impl ServerState {
         Ok(())
     }
 
-    async fn start_punch(&self, session_id: String, remote: LegacyEndpoint, punch: LegacyPunch) -> Result<()> {
+    async fn start_punch(
+        &self,
+        session_id: String,
+        remote: LegacyEndpoint,
+        punch: LegacyPunch,
+    ) -> Result<()> {
         let socket = self.udp_socket.clone();
         let target = SocketAddr::new(remote.host.parse()?, remote.port);
-        self.session_hashes
-            .lock()
-            .await
-            .insert(fips_nostr_rendezvous::session_hash(&session_id), session_id.clone());
+        self.session_hashes.lock().await.insert(
+            fips_nostr_rendezvous::session_hash(&session_id),
+            session_id.clone(),
+        );
         let interval_ms = punch.interval_ms;
         let duration_ms = punch.duration_ms;
         let delay_ms = punch.start_at_ms.saturating_sub(now_ms());
@@ -645,10 +703,10 @@ impl ServerState {
             .iter()
             .map(|remote| Ok(SocketAddr::new(remote.host.parse()?, remote.port)))
             .collect::<Result<Vec<_>>>()?;
-        self.session_hashes
-            .lock()
-            .await
-            .insert(fips_nostr_rendezvous::session_hash(&session_id), session_id.clone());
+        self.session_hashes.lock().await.insert(
+            fips_nostr_rendezvous::session_hash(&session_id),
+            session_id.clone(),
+        );
         let interval_ms = punch.interval_ms;
         let duration_ms = punch.duration_ms;
         let delay_ms = punch.start_at_ms.saturating_sub(now_ms());
@@ -666,7 +724,11 @@ impl ServerState {
         Ok(())
     }
 
-    async fn ensure_session(&self, session_id: &str, remote: SocketAddr) -> Arc<Mutex<SessionState>> {
+    async fn ensure_session(
+        &self,
+        session_id: &str,
+        remote: SocketAddr,
+    ) -> Arc<Mutex<SessionState>> {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.get(session_id) {
             return session.clone();
@@ -829,8 +891,10 @@ impl ServerState {
                 _ = child.wait() => false,
             };
 
-            let stdout = String::from_utf8_lossy(&stdout_task.await.unwrap_or_default()).to_string();
-            let stderr = String::from_utf8_lossy(&stderr_task.await.unwrap_or_default()).to_string();
+            let stdout =
+                String::from_utf8_lossy(&stdout_task.await.unwrap_or_default()).to_string();
+            let stderr =
+                String::from_utf8_lossy(&stderr_task.await.unwrap_or_default()).to_string();
             if let Some(session) = state.sessions.lock().await.get(&session_id).cloned() {
                 session.lock().await.running = None;
             }
@@ -847,7 +911,11 @@ impl ServerState {
         Ok(())
     }
 
-    async fn handle_shell_interrupt(&self, session_id: &str, session: Arc<Mutex<SessionState>>) -> Result<()> {
+    async fn handle_shell_interrupt(
+        &self,
+        session_id: &str,
+        session: Arc<Mutex<SessionState>>,
+    ) -> Result<()> {
         let mut guard = session.lock().await;
         if let Some(cancel) = guard.running.take() {
             let _ = cancel.send(());
@@ -900,7 +968,9 @@ async fn main() -> Result<()> {
         args.stun_servers = stun_servers;
     }
     if args.public_host.is_none() {
-        args.public_host = env::var("FIPS_UDP_PUBLIC_HOST").ok().filter(|v| !v.is_empty());
+        args.public_host = env::var("FIPS_UDP_PUBLIC_HOST")
+            .ok()
+            .filter(|v| !v.is_empty());
     }
     args.advert_relays.retain(|v| !v.trim().is_empty());
     args.dm_relays.retain(|v| !v.trim().is_empty());
@@ -919,13 +989,16 @@ async fn main() -> Result<()> {
     }
     client.connect().await;
 
-    let udp_socket = Arc::new(UdpSocket::bind(("0.0.0.0", args.udp_port)).await?);
+    let base_udp_socket = std::net::UdpSocket::bind(("0.0.0.0", args.udp_port))?;
+    base_udp_socket.set_nonblocking(true)?;
+    let udp_socket = Arc::new(UdpSocket::from_std(base_udp_socket.try_clone()?)?);
     let pubkey = keys.public_key();
     let npub = pubkey.to_bech32()?;
     let state = Arc::new(ServerState {
         client,
         udp_socket: udp_socket.clone(),
         keys,
+        resolved_nsec: args.nsec.clone(),
         npub: npub.clone(),
         pubkey,
         advert_relays: args.advert_relays.clone(),
@@ -936,7 +1009,11 @@ async fn main() -> Result<()> {
             set.extend(args.dm_relays.iter().cloned());
             set.into_iter().collect()
         },
-        trusted_npubs: args.trusted_npubs.into_iter().filter(|v| !v.is_empty()).collect(),
+        trusted_npubs: args
+            .trusted_npubs
+            .into_iter()
+            .filter(|v| !v.is_empty())
+            .collect(),
         stun_servers: args.stun_servers.clone(),
         public_host: args.public_host.clone(),
         punch_interval_ms: 300,
@@ -951,6 +1028,9 @@ async fn main() -> Result<()> {
         stun_observed_at: Mutex::new(None),
         sessions: Mutex::new(HashMap::new()),
         session_hashes: Mutex::new(HashMap::new()),
+        pending_handoffs: Mutex::new(HashMap::new()),
+        handoff_fips: args.handoff_fips,
+        handoff_socket: Mutex::new(Some(base_udp_socket)),
     });
 
     let udp_state = state.clone();
@@ -982,6 +1062,37 @@ async fn main() -> Result<()> {
                         let ack = build_punch_packet(PunchPacketKind::Ack, &session_id);
                         let _ = udp_state.udp_socket.send_to(&ack, remote).await;
                     }
+                    if udp_state.handoff_fips {
+                        let peer_npub = udp_state.pending_handoffs.lock().await.remove(&session_id);
+                        if let Some(peer_npub) = peer_npub {
+                            let handoff_socket = udp_state
+                                .handoff_socket
+                                .lock()
+                                .await
+                                .take()
+                                .context("FIPS handoff socket already consumed")?;
+                            let status = handoff_established_traversal(
+                                &udp_state.resolved_nsec,
+                                session_id.clone(),
+                                peer_npub,
+                                handoff_socket,
+                                remote,
+                            )
+                            .await?;
+                            println!(
+                                "[fips-handoff] {}",
+                                serde_json::to_string(&json!({
+                                    "sessionId": status.session_id,
+                                    "peerNpub": status.peer_npub,
+                                    "transportId": status.transport_id,
+                                    "localAddr": status.local_addr,
+                                    "remoteAddr": status.remote_addr,
+                                }))
+                                .unwrap_or_else(|_| "{\"kind\":\"log-error\"}".to_owned())
+                            );
+                            break;
+                        }
+                    }
                     let _ = udp_state.ensure_session(&session_id, remote).await;
                     continue;
                 }
@@ -998,16 +1109,27 @@ async fn main() -> Result<()> {
                             .unwrap_or_default()
                             .trim()
                             .to_owned();
-                        let command_id = frame.payload.get("id").and_then(Value::as_str).map(str::to_owned);
+                        let command_id = frame
+                            .payload
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
                         let state = udp_state.clone();
                         tokio::spawn(async move {
                             let _ = state
-                                .handle_shell_command(frame.session_id, session, command_id, command)
+                                .handle_shell_command(
+                                    frame.session_id,
+                                    session,
+                                    command_id,
+                                    command,
+                                )
                                 .await;
                         });
                     }
                     Some("shell_interrupt") => {
-                        let _ = udp_state.handle_shell_interrupt(&frame.session_id, session).await;
+                        let _ = udp_state
+                            .handle_shell_interrupt(&frame.session_id, session)
+                            .await;
                     }
                     _ => {}
                 }
@@ -1024,7 +1146,8 @@ async fn main() -> Result<()> {
 
     let advertise_state = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(advertise_state.advertise_interval_ms));
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(advertise_state.advertise_interval_ms));
         loop {
             interval.tick().await;
             let _ = advertise_state.publish_advert().await;
@@ -1035,7 +1158,10 @@ async fn main() -> Result<()> {
         .client
         .subscribe_to(
             state.dm_relays.clone(),
-            Filter::new().kind(Kind::GiftWrap).pubkey(state.pubkey).limit(0),
+            Filter::new()
+                .kind(Kind::GiftWrap)
+                .pubkey(state.pubkey)
+                .limit(0),
             None,
         )
         .await?;
@@ -1050,6 +1176,7 @@ async fn main() -> Result<()> {
             "dmRelays": state.dm_relays,
             "relaySource": "embedded-defaults",
             "trustedCount": state.trusted_npubs.len(),
+            "handoffFips": state.handoff_fips,
         }))?
     );
 
@@ -1073,10 +1200,14 @@ async fn main() -> Result<()> {
                 }
 
                 let from_npub = sender.to_bech32()?;
-                if !notify_state.trusted_npubs.is_empty() && !notify_state.trusted_npubs.contains(&from_npub) {
+                if !notify_state.trusted_npubs.is_empty()
+                    && !notify_state.trusted_npubs.contains(&from_npub)
+                {
                     println!(
                         "[reject] {}",
-                        serde_json::to_string(&json!({"reason":"untrusted-npub","fromNpub":from_npub}))?
+                        serde_json::to_string(
+                            &json!({"reason":"untrusted-npub","fromNpub":from_npub})
+                        )?
                     );
                     continue;
                 }
@@ -1089,8 +1220,7 @@ async fn main() -> Result<()> {
                         let now = now_ms();
                         let (reflexive_address, local_addresses) =
                             notify_state.local_traversal_addresses().await?;
-                        let accepted =
-                            reflexive_address.is_some() || !local_addresses.is_empty();
+                        let accepted = reflexive_address.is_some() || !local_addresses.is_empty();
                         let punch = PunchHint {
                             start_at_ms: now + notify_state.punch_start_delay_ms,
                             interval_ms: notify_state.punch_interval_ms,
@@ -1126,6 +1256,11 @@ async fn main() -> Result<()> {
                         notify_state
                             .send_dm_to(reply_relays, sender, &answer, "answer")
                             .await?;
+                        notify_state
+                            .pending_handoffs
+                            .lock()
+                            .await
+                            .insert(offer.session_id.clone(), offer.sender_npub.clone());
 
                         println!(
                             "[rendezvous] answer published {}",
@@ -1204,17 +1339,17 @@ async fn main() -> Result<()> {
                     }),
                 };
 
-                    println!(
-                        "[rendezvous] hello received {}",
-                        serde_json::to_string(&json!({
-                            "fromNpub": from_npub,
-                            "nonce": hello.nonce,
-                            "sessionId": hello.session_id,
-                            "wants": hello.wants,
-                            "hasClientEndpoint": hello.client_endpoint.is_some(),
-                            "clientEndpoint": hello.client_endpoint,
-                        }))?
-                    );
+                println!(
+                    "[rendezvous] hello received {}",
+                    serde_json::to_string(&json!({
+                        "fromNpub": from_npub,
+                        "nonce": hello.nonce,
+                        "sessionId": hello.session_id,
+                        "wants": hello.wants,
+                        "hasClientEndpoint": hello.client_endpoint.is_some(),
+                        "clientEndpoint": hello.client_endpoint,
+                    }))?
+                );
 
                 let reply_relays = notify_state.preferred_dm_relays(sender).await?;
                 notify_state
@@ -1235,6 +1370,11 @@ async fn main() -> Result<()> {
 
                 if wants.fips_connect {
                     if let Some(client_endpoint) = hello.client_endpoint {
+                        notify_state
+                            .pending_handoffs
+                            .lock()
+                            .await
+                            .insert(hello.nonce.clone(), from_npub.clone());
                         notify_state
                             .start_punch(hello.nonce.clone(), client_endpoint, punch)
                             .await?;

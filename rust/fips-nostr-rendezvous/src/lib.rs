@@ -1,3 +1,5 @@
+pub mod fips_handoff;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,20 +12,12 @@ pub const PUNCH_MAGIC: u32 = 0x4E505443;
 pub const PUNCH_ACK_MAGIC: u32 = 0x4E505441;
 pub const TRAVERSAL_SIGNAL_APP: &str = "fips.nat.traversal.v1";
 
-pub const DEFAULT_ADVERT_RELAYS: &[&str] = &[
-    "wss://offchain.pub",
-    "wss://strfry.bitsbytom.com",
-];
+pub const DEFAULT_ADVERT_RELAYS: &[&str] = &["wss://offchain.pub", "wss://strfry.bitsbytom.com"];
 
-pub const DEFAULT_DM_RELAYS: &[&str] = &[
-    "wss://nip17.com",
-    "wss://offchain.pub",
-];
+pub const DEFAULT_DM_RELAYS: &[&str] = &["wss://nip17.com", "wss://offchain.pub"];
 
-pub const DEFAULT_STUN_SERVERS: &[&str] = &[
-    "stun:fips.tomdwyer.uk:3478",
-    "stun:stun.l.google.com:19302",
-];
+pub const DEFAULT_STUN_SERVERS: &[&str] =
+    &["stun:fips.tomdwyer.uk:3478", "stun:stun.l.google.com:19302"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraversalAddress {
@@ -326,9 +320,7 @@ pub fn decode_session_frame(bytes: &[u8]) -> Result<SessionFrame, RendezvousErro
 fn same_subnet_24(left: &TraversalAddress, right: &TraversalAddress) -> bool {
     let left_parts = left.ip.split('.').collect::<Vec<_>>();
     let right_parts = right.ip.split('.').collect::<Vec<_>>();
-    left_parts.len() == 4
-        && right_parts.len() == 4
-        && left_parts[..3] == right_parts[..3]
+    left_parts.len() == 4 && right_parts.len() == 4 && left_parts[..3] == right_parts[..3]
 }
 
 pub fn create_traversal_offer(
@@ -622,8 +614,14 @@ mod tests {
             published_at: 1,
             expires_at: 2,
             sequence: 1,
-            relays: DEFAULT_DM_RELAYS.iter().map(|relay| relay.to_string()).collect(),
-            stun_servers: DEFAULT_STUN_SERVERS.iter().map(|server| server.to_string()).collect(),
+            relays: DEFAULT_DM_RELAYS
+                .iter()
+                .map(|relay| relay.to_string())
+                .collect(),
+            stun_servers: DEFAULT_STUN_SERVERS
+                .iter()
+                .map(|server| server.to_string())
+                .collect(),
             transports: vec!["udp".to_owned()],
             endpoint_hint: Some(EndpointHint {
                 host: "203.0.113.10".to_owned(),
@@ -741,13 +739,18 @@ mod tests {
 
         assert_eq!(planned[0].strategy, PunchStrategy::Lan);
         assert_eq!(planned[1].strategy, PunchStrategy::Reflexive);
-        assert!(planned.iter().any(|target| target.strategy == PunchStrategy::Mixed));
-        assert!(planned.iter().any(|target| target.strategy == PunchStrategy::Local));
+        assert!(planned
+            .iter()
+            .any(|target| target.strategy == PunchStrategy::Mixed));
+        assert!(planned
+            .iter()
+            .any(|target| target.strategy == PunchStrategy::Local));
     }
 
     #[test]
     fn negotiates_window_and_builds_bounded_schedule() {
-        let window = negotiate_punch_window(1_700_000_000_000, 1_000, 2_000, 150, 300, 10_000, 30_000);
+        let window =
+            negotiate_punch_window(1_700_000_000_000, 1_000, 2_000, 150, 300, 10_000, 30_000);
         assert_eq!(
             window,
             PunchWindow {
@@ -757,7 +760,15 @@ mod tests {
             }
         );
         let schedule = build_punch_attempt_schedule(window, 4);
-        assert_eq!(schedule, vec![1_700_000_002_000, 1_700_000_002_300, 1_700_000_002_600, 1_700_000_002_900]);
+        assert_eq!(
+            schedule,
+            vec![
+                1_700_000_002_000,
+                1_700_000_002_300,
+                1_700_000_002_600,
+                1_700_000_002_900
+            ]
+        );
     }
 
     #[test]
@@ -792,11 +803,18 @@ mod tests {
             &answer.local_addresses,
             answer.reflexive_address.as_ref(),
         );
-        let window = negotiate_punch_window(1_700_000_000_600, 1_000, 1_000, 200, 200, 10_000, 10_000);
+        let window =
+            negotiate_punch_window(1_700_000_000_600, 1_000, 1_000, 200, 200, 10_000, 10_000);
         let schedule = build_punch_attempt_schedule(window, 4);
 
         assert_eq!(targets[0].strategy, PunchStrategy::Lan);
-        assert!(attempt_direct_probe(&targets, &targets, NatType::RestrictedCone, NatType::RestrictedCone, schedule.len()));
+        assert!(attempt_direct_probe(
+            &targets,
+            &targets,
+            NatType::RestrictedCone,
+            NatType::RestrictedCone,
+            schedule.len()
+        ));
     }
 
     #[test]
@@ -831,9 +849,16 @@ mod tests {
             &answer.local_addresses,
             answer.reflexive_address.as_ref(),
         );
-        let window = negotiate_punch_window(1_700_000_000_600, 1_000, 1_000, 200, 200, 10_000, 10_000);
+        let window =
+            negotiate_punch_window(1_700_000_000_600, 1_000, 1_000, 200, 200, 10_000, 10_000);
         let schedule = build_punch_attempt_schedule(window, 4);
 
-        assert!(!attempt_direct_probe(&targets, &targets, NatType::Symmetric, NatType::Symmetric, schedule.len()));
+        assert!(!attempt_direct_probe(
+            &targets,
+            &targets,
+            NatType::Symmetric,
+            NatType::Symmetric,
+            schedule.len()
+        ));
     }
 }

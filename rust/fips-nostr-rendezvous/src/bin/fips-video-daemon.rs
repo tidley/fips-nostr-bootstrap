@@ -6,18 +6,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use async_stream::stream;
+use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use fips_nostr_rendezvous::fips_handoff::handoff_established_traversal;
+use fips::AppCommand;
+use fips_nostr_rendezvous::fips_handoff::handoff_established_app_runtime;
 use fips_nostr_rendezvous::{
-    build_punch_packet, create_traversal_offer, decode_session_frame, encode_session_frame,
-    parse_punch_packet, parse_stun_url, plan_punch_targets, validate_traversal_answer_for_offer,
-    LegacyEndpoint, LegacyHelloMessage, LegacyPunch, LegacyServerInfoMessage, LegacyWants,
-    PunchPacketKind, SessionFrame, TraversalAddress, TraversalAdvert, TraversalAnswer,
-    TraversalOffer, ADVERT_KIND, DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
+    build_punch_packet, create_traversal_offer, decode_session_frame, parse_punch_packet,
+    parse_stun_url, plan_punch_targets, validate_traversal_answer_for_offer, LegacyEndpoint,
+    LegacyHelloMessage, LegacyPunch, LegacyServerInfoMessage, LegacyWants, PunchPacketKind,
+    TraversalAddress, TraversalAdvert, TraversalAnswer, TraversalOffer, ADVERT_KIND,
+    DEFAULT_ADVERT_RELAYS, DEFAULT_DM_RELAYS, DEFAULT_STUN_SERVERS,
 };
 use nostr::nips::nip17;
 use nostr::nips::nip19::ToBech32;
@@ -35,8 +39,8 @@ use tokio::time::{sleep, timeout, Instant};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "fips-web-daemon",
-    about = "Rust web/daemon runtime for the FIPS web console"
+    name = "fips-video-daemon",
+    about = "Rust video daemon runtime for FIPS-over-Nostr rendezvous"
 )]
 struct Args {
     #[arg(long, default_value = "")]
@@ -213,6 +217,30 @@ struct ActiveSession {
     remote: LegacyEndpoint,
 }
 
+const VIDEO_APP_PORT: u16 = 4100;
+const VIDEO_FRAME_CHUNK_SIZE: usize = 900;
+const VIDEO_FRAME_KIND: u8 = 1;
+
+#[derive(Debug, Clone)]
+struct LatestFrame {
+    frame_id: u32,
+    jpeg: Vec<u8>,
+    received_at_ms: u64,
+}
+
+#[derive(Debug)]
+struct FrameAssembly {
+    total_chunks: u16,
+    chunks: Vec<Option<Vec<u8>>>,
+    received_chunks: usize,
+}
+
+#[derive(Debug, Clone)]
+struct VideoRuntimeHandle {
+    peer_npub: String,
+    command_tx: tokio::sync::mpsc::Sender<AppCommand>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MetaResponse {
     ok: bool,
@@ -352,6 +380,9 @@ struct AppState {
     punch_hashes: Mutex<HashMap<[u8; 16], String>>,
     active_session: RwLock<Option<ActiveSession>>,
     handoff_fips: bool,
+    video_runtime: Mutex<Option<VideoRuntimeHandle>>,
+    latest_frame: RwLock<Option<LatestFrame>>,
+    pending_frames: Mutex<HashMap<(String, u32), FrameAssembly>>,
     handoff_socket: Mutex<Option<std::net::UdpSocket>>,
     udp_shutdown: watch::Sender<bool>,
     events: broadcast::Sender<EventEnvelope>,
@@ -959,32 +990,108 @@ impl AppState {
         .await;
     }
 
-    async fn send_shell_frame(
-        &self,
-        channel: &str,
-        payload: Value,
-        frame_type: &str,
-    ) -> Result<()> {
-        let active = self
-            .active_session
-            .read()
+    async fn set_video_runtime(&self, runtime: VideoRuntimeHandle) {
+        *self.video_runtime.lock().await = Some(runtime);
+    }
+
+    async fn send_video_frame(&self, jpeg: Vec<u8>) -> Result<u32> {
+        let runtime = self
+            .video_runtime
+            .lock()
             .await
             .clone()
-            .context("not connected")?;
-        let frame = SessionFrame {
-            session_id: active.session_id.clone(),
-            frame_type: frame_type.to_owned(),
-            channel: Some(channel.to_owned()),
-            payload,
-            at: now_ms(),
-        };
-        let bytes = encode_session_frame(&frame)?;
-        self.udp_socket
-            .send_to(
-                &bytes,
-                SocketAddr::new(active.remote.host.parse()?, active.remote.port),
+            .context("FIPS video runtime not connected")?;
+        let frame_id = rand::random::<u32>();
+        let total_chunks = jpeg.len().div_ceil(VIDEO_FRAME_CHUNK_SIZE) as u16;
+
+        for (index, chunk) in jpeg.chunks(VIDEO_FRAME_CHUNK_SIZE).enumerate() {
+            let mut packet = Vec::with_capacity(9 + chunk.len());
+            packet.push(VIDEO_FRAME_KIND);
+            packet.extend_from_slice(&frame_id.to_be_bytes());
+            packet.extend_from_slice(&total_chunks.to_be_bytes());
+            packet.extend_from_slice(&(index as u16).to_be_bytes());
+            packet.extend_from_slice(chunk);
+
+            let (tx, rx) = oneshot::channel();
+            runtime
+                .command_tx
+                .send(AppCommand::SendDatagram {
+                    peer_npub: runtime.peer_npub.clone(),
+                    src_port: VIDEO_APP_PORT,
+                    dst_port: VIDEO_APP_PORT,
+                    payload: packet,
+                    response: tx,
+                })
+                .await
+                .context("video command channel closed")?;
+            rx.await
+                .context("video command response dropped")?
+                .map_err(anyhow::Error::from)?;
+        }
+
+        Ok(frame_id)
+    }
+
+    async fn accept_video_datagram(&self, peer_npub: String, payload: Vec<u8>) -> Result<()> {
+        if payload.len() < 9 {
+            return Ok(());
+        }
+        if payload[0] != VIDEO_FRAME_KIND {
+            return Ok(());
+        }
+        let frame_id = u32::from_be_bytes(payload[1..5].try_into()?);
+        let total_chunks = u16::from_be_bytes(payload[5..7].try_into()?);
+        let chunk_index = u16::from_be_bytes(payload[7..9].try_into()?);
+        let chunk_payload = payload[9..].to_vec();
+        let key = (peer_npub, frame_id);
+
+        let mut completed: Option<Vec<u8>> = None;
+        {
+            let mut pending = self.pending_frames.lock().await;
+            let assembly = pending.entry(key.clone()).or_insert_with(|| FrameAssembly {
+                total_chunks,
+                chunks: vec![None; total_chunks as usize],
+                received_chunks: 0,
+            });
+            if assembly.total_chunks != total_chunks {
+                *assembly = FrameAssembly {
+                    total_chunks,
+                    chunks: vec![None; total_chunks as usize],
+                    received_chunks: 0,
+                };
+            }
+            let index = chunk_index as usize;
+            if index >= assembly.chunks.len() {
+                return Ok(());
+            }
+            if assembly.chunks[index].is_none() {
+                assembly.received_chunks += 1;
+                assembly.chunks[index] = Some(chunk_payload);
+            }
+            if assembly.received_chunks == assembly.total_chunks as usize {
+                let mut jpeg = Vec::new();
+                for chunk in assembly.chunks.iter_mut() {
+                    if let Some(bytes) = chunk.take() {
+                        jpeg.extend_from_slice(&bytes);
+                    }
+                }
+                completed = Some(jpeg);
+                pending.remove(&key);
+            }
+        }
+
+        if let Some(jpeg) = completed {
+            *self.latest_frame.write().await = Some(LatestFrame {
+                frame_id,
+                jpeg,
+                received_at_ms: now_ms(),
+            });
+            self.emit(
+                "frame",
+                json!({"frameId": frame_id, "receivedAt": now_ms()}),
             )
-            .await?;
+            .await;
+        }
         Ok(())
     }
 }
@@ -992,11 +1099,6 @@ impl AppState {
 #[derive(Debug, Deserialize)]
 struct ConnectRequest {
     npub: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CmdRequest {
-    cmd: String,
 }
 
 async fn api_meta(State(state): State<Arc<AppState>>) -> Json<MetaResponse> {
@@ -1017,13 +1119,44 @@ async fn api_discover(State(state): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
+async fn api_frame(State(state): State<Arc<AppState>>, body: Bytes) -> Json<Value> {
+    match state.send_video_frame(body.to_vec()).await {
+        Ok(frame_id) => Json(json!({"ok": true, "frameId": frame_id, "bytes": body.len()})),
+        Err(err) => Json(json!({"ok": false, "error": err.to_string()})),
+    }
+}
+
+async fn api_remote_frame(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(frame) = state.latest_frame.read().await.clone() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("image/jpeg"));
+        headers.insert(
+            "cache-control",
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
+        headers.insert(
+            "x-frame-id",
+            HeaderValue::from_str(&frame.frame_id.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        headers.insert(
+            "x-received-at",
+            HeaderValue::from_str(&frame.received_at_ms.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        (StatusCode::OK, headers, frame.jpeg).into_response()
+    } else {
+        StatusCode::NO_CONTENT.into_response()
+    }
+}
+
 async fn api_connect(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ConnectRequest>,
 ) -> Json<Value> {
     let npub = body.npub.unwrap_or_default().trim().to_owned();
     println!(
-        "[web-daemon] connect request {}",
+        "[video-daemon] connect request {}",
         serde_json::to_string(&json!({
             "target": if npub.is_empty() { "(first-discovered-peer)" } else { npub.as_str() },
             "mode": if npub.is_empty() { "advert-discovery" } else { "explicit-npub-direct" },
@@ -1096,7 +1229,7 @@ async fn api_connect(
             }
             Err(offer_err) => {
                 println!(
-                    "[web-daemon] offer fallback {}",
+                    "[video-daemon] offer fallback {}",
                     serde_json::to_string(&json!({
                         "target": target_npub,
                         "error": offer_err.to_string(),
@@ -1138,19 +1271,43 @@ async fn api_connect(
                     .context("invalid established remote host")?,
                 established_remote.port,
             );
-            let handoff = handoff_established_traversal(
+            let runtime = handoff_established_app_runtime(
                 &state.resolved_nsec,
                 session_id.clone(),
                 target_npub.clone(),
                 handoff_socket,
                 remote_addr,
+                VIDEO_APP_PORT,
             )
             .await?;
+            let (handoff, command_tx, app_rx) = runtime.into_parts();
+            state
+                .set_video_runtime(VideoRuntimeHandle {
+                    peer_npub: target_npub.clone(),
+                    command_tx,
+                })
+                .await;
+            let frame_state = state.clone();
+            let runtime_handle = tokio::runtime::Handle::current();
+            tokio::task::spawn_blocking(move || {
+                while let Ok(datagram) = app_rx.recv() {
+                    let frame_state = frame_state.clone();
+                    let peer_npub = datagram.peer_npub;
+                    let payload = datagram.payload;
+                    runtime_handle.block_on(async move {
+                        if let Err(err) =
+                            frame_state.accept_video_datagram(peer_npub, payload).await
+                        {
+                            eprintln!("[video-runtime] frame-accept-error {err}");
+                        }
+                    });
+                }
+            });
             state
                 .set_active_session(session_id.clone(), established_remote.clone())
                 .await;
             response["handoff"] = serde_json::to_value(handoff)?;
-            response["runtimeMode"] = json!("fips-handoff");
+            response["runtimeMode"] = json!("fips-video");
             return Ok(response);
         }
 
@@ -1165,7 +1322,7 @@ async fn api_connect(
     match result {
         Ok(value) => {
             println!(
-                "[web-daemon] connect success {}",
+                "[video-daemon] connect success {}",
                 serde_json::to_string(&json!({
                     "sessionId": value["sessionId"],
                     "remote": value["remote"],
@@ -1177,7 +1334,7 @@ async fn api_connect(
         }
         Err(err) => {
             println!(
-                "[web-daemon] connect failure {}",
+                "[video-daemon] connect failure {}",
                 serde_json::to_string(&json!({
                     "error": err.to_string(),
                     "elapsedMs": now_ms().saturating_sub(started_at),
@@ -1186,39 +1343,6 @@ async fn api_connect(
             );
             Json(json!({"ok": false, "error": err.to_string()}))
         }
-    }
-}
-
-async fn api_cmd(State(state): State<Arc<AppState>>, Json(body): Json<CmdRequest>) -> Json<Value> {
-    if state.handoff_fips {
-        return Json(json!({
-            "ok": false,
-            "error": "shell command channel unavailable after FIPS handoff"
-        }));
-    }
-    let id = nonce();
-    match state
-        .send_shell_frame("shell", json!({"id": id, "cmd": body.cmd}), "request")
-        .await
-    {
-        Ok(()) => Json(json!({"ok": true, "id": id})),
-        Err(err) => Json(json!({"ok": false, "error": err.to_string()})),
-    }
-}
-
-async fn api_ctrlc(State(state): State<Arc<AppState>>) -> Json<Value> {
-    if state.handoff_fips {
-        return Json(json!({
-            "ok": false,
-            "error": "shell interrupt unavailable after FIPS handoff"
-        }));
-    }
-    match state
-        .send_shell_frame("shell_interrupt", json!({"ts": now_ms()}), "request")
-        .await
-    {
-        Ok(()) => Json(json!({"ok": true})),
-        Err(err) => Json(json!({"ok": false, "error": err.to_string()})),
     }
 }
 
@@ -1313,6 +1437,9 @@ async fn main() -> Result<()> {
         punch_hashes: Mutex::new(HashMap::new()),
         active_session: RwLock::new(None),
         handoff_fips: args.handoff_fips,
+        video_runtime: Mutex::new(None),
+        latest_frame: RwLock::new(None),
+        pending_frames: Mutex::new(HashMap::new()),
         handoff_socket: Mutex::new(Some(base_udp_socket)),
         udp_shutdown: udp_shutdown_tx,
         events: event_tx,
@@ -1466,8 +1593,8 @@ async fn main() -> Result<()> {
         .route("/api/meta", get(api_meta))
         .route("/api/discover", get(api_discover))
         .route("/api/connect", post(api_connect))
-        .route("/api/cmd", post(api_cmd))
-        .route("/api/ctrlc", post(api_ctrlc))
+        .route("/api/frame", post(api_frame))
+        .route("/api/remote-frame", get(api_remote_frame))
         .route("/api/events", get(api_events))
         .with_state(state.clone());
 
@@ -1475,7 +1602,7 @@ async fn main() -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "app": "fips-web-daemon-rs",
+            "app": "fips-video-daemon-rs",
             "http": format!("http://127.0.0.1:{}", listener.local_addr()?.port()),
             "npub": npub,
             "udpPort": udp_socket.local_addr()?.port(),
@@ -1484,6 +1611,7 @@ async fn main() -> Result<()> {
             "relaySource": "embedded-defaults",
             "discoveryEnabled": !args.no_discover,
             "handoffFips": args.handoff_fips,
+            "appPort": VIDEO_APP_PORT,
         }))?
     );
 

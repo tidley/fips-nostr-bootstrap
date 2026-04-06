@@ -1,58 +1,51 @@
 # fips-bootstrap-client (Rust)
 
-Rust bootstrap client for:
+Legacy Rust bootstrap client focused on the older `hello -> server-info` flow.
 
-1. Sending `fips.rendezvous.hello` over Nostr (NIP-17 gift wrap)
-2. Receiving/decrypting `fips.rendezvous.server-info`
-3. Optionally running UDP punch probing (`--mode connect`)
-4. Writing handoff JSON for downstream FIPS data-plane startup
+This crate is no longer the primary runtime path in the repo. The main functional traversal path now lives in:
+- [rust/fips-nostr-rendezvous/src/bin/fips-shell-server.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-shell-server.rs)
+- [rust/fips-nostr-rendezvous/src/bin/fips-web-daemon.rs](/home/tom/code/fips-nostr-bootstrap/rust/fips-nostr-rendezvous/src/bin/fips-web-daemon.rs)
 
-## Implemented (Phase 1)
+## What This Crate Still Does
 
-- ✅ Nostr relay websocket transport (`REQ` / `EVENT` / `OK` handling)
-- ✅ NIP-17-compatible wrapping + unwrapping via `nostr` crate gift wrap APIs
-- ✅ Wire schema validation (`version`, `sessionId`, `nonce`)
-- ✅ Bootstrap response parsing (`endpoint`, `stun`, `punch`)
-- ✅ UDP punch probe loop (`PROBE` / `PROBE_ACK`)
-- ✅ Handoff JSON output (`--out-handoff`)
+- sends `fips.rendezvous.hello`
+- receives `fips.rendezvous.server-info`
+- optionally performs legacy UDP punch probing
+- writes handoff JSON for downstream startup experiments
+
+Important files:
+- [src/main.rs](/home/tom/code/fips-nostr-bootstrap/rust/bootstrap-client/src/main.rs)
+- [src/handoff.rs](/home/tom/code/fips-nostr-bootstrap/rust/bootstrap-client/src/handoff.rs)
+
+## Current Value
+
+Useful as:
+- a reference for older bootstrap-only flows
+- a handoff JSON shape example
+- a small compatibility tool
+
+Not useful as:
+- the preferred traversal implementation
+- the forward-looking FIPS integration path
 
 ## Build
 
 ```bash
-cd rust/bootstrap-client
+cd /home/tom/code/fips-nostr-bootstrap/rust/bootstrap-client
 cargo build --release
 ```
 
-## Run (bootstrap only)
+## Example
 
 ```bash
 ./target/release/fips-bootstrap-client \
-  --relay wss://fips.tomdwyer.uk \
+  --relay wss://offchain.pub \
   --server-npub <server_npub> \
   --mode bootstrap
 ```
 
-## Run (bootstrap + connect)
+## Handoff Note
 
-```bash
-./target/release/fips-bootstrap-client \
-  --relay wss://fips.tomdwyer.uk \
-  --server-npub <server_npub> \
-  --mode connect \
-  --timeout-ms 25000
-```
+The JSON written by this crate is metadata-only. It does not solve the real remaining problem for FIPS integration, which is handing over an already established punched UDP path to the transport/session layer.
 
-## Write handoff
-
-```bash
-./target/release/fips-bootstrap-client \
-  --relay wss://fips.tomdwyer.uk \
-  --server-npub <server_npub> \
-  --mode connect \
-  --out-handoff /tmp/fips-handoff.json
-```
-
-## Notes
-
-- `9999` is not protocol-fixed; any reachable UDP port can work if advertised in `server-info.endpoint.port` and reachable via NAT traversal.
-- For stable identity in testing, pass `--nsec <nsec...>`; otherwise an ephemeral key is generated each run.
+That real handoff work should now happen in the upstream FIPS repo branch, not here.
