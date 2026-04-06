@@ -31,7 +31,6 @@ use nostr_sdk::prelude::{Client, Options, RelayPoolNotification};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::signal;
 use tokio::sync::{broadcast, oneshot, watch, Mutex, RwLock};
 use tokio::time::{sleep, timeout, Instant};
 
@@ -1698,12 +1697,8 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    tokio::select! {
-        res = connect_cli(state.clone(), args.npub.clone()) => { res?; }
-        res = notify_task => { res??; }
-        res = udp_task => { res??; }
-        _ = signal::ctrl_c() => {}
-    }
-
-    Ok(())
+    let result = connect_cli(state.clone(), args.npub.clone()).await;
+    notify_task.abort();
+    udp_task.abort();
+    result
 }
