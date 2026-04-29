@@ -14,8 +14,8 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use fips::AppCommand;
 use fips_nostr_rendezvous::fips_handoff::handoff_established_app_runtime;
+use fips_nostr_rendezvous::fips_handoff::AppCommand;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_offer, decode_session_frame, parse_punch_packet,
     parse_stun_url, plan_punch_targets, validate_traversal_answer_for_offer, LegacyEndpoint,

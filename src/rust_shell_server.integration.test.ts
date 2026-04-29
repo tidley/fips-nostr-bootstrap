@@ -31,6 +31,28 @@ async function waitFor<T>(fn: () => Promise<T>, predicate: (value: T) => boolean
   }
 }
 
+async function waitForProcessOutput(
+  process: AppProcess,
+  predicate: (output: string) => boolean,
+  timeoutMs = 30000,
+  intervalMs = 250,
+) {
+  const started = Date.now();
+  while (true) {
+    const output = `${process.stdout.join('')}\n${process.stderr.join('')}`;
+    if (predicate(output)) return output;
+    if (process.child.exitCode !== null || process.child.signalCode !== null) {
+      throw new Error(
+        `rust shell server exited before startup; code=${process.child.exitCode} signal=${process.child.signalCode}\n${output}`,
+      );
+    }
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`timed out waiting for rust shell server startup after ${timeoutMs}ms\n${output}`);
+    }
+    await delay(intervalMs);
+  }
+}
+
 type AppProcess = {
   child: ReturnType<typeof spawn>;
   stdout: string[];
@@ -98,6 +120,11 @@ describe('rust shell server interop', () => {
   beforeAll(async () => {
     relay = await startEmbeddedRelay({ port: 0 });
     server = spawnRustServer(relay.url);
+    await waitForProcessOutput(
+      server,
+      (output) => output.includes('"advertRelays"') || output.includes('"kind":"advert"'),
+      60000,
+    );
 
     clientNode = createFipsNostrRendezvousNode({
       advertRelays: [relay.url],
@@ -109,7 +136,7 @@ describe('rust shell server interop', () => {
       stunServers: [],
     });
     await clientNode.start();
-  }, 30000);
+  }, 70000);
 
   afterAll(async () => {
     clientNode?.close();

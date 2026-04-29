@@ -450,13 +450,21 @@ impl AppState {
         let request = create_stun_binding_request(txn_id);
         let (tx, rx) = oneshot::channel();
         self.pending_stun.lock().await.insert(txn_id, tx);
-        self.udp_socket
+        if let Err(err) = self
+            .udp_socket
             .send_to(&request, format!("{}:{}", endpoint.host, endpoint.port))
-            .await?;
-        timeout(Duration::from_millis(self.stun_timeout_ms), rx)
             .await
-            .with_context(|| format!("stun timeout to {}", stun_url))?
-            .map_err(|_| anyhow!("stun channel dropped"))
+        {
+            self.pending_stun.lock().await.remove(&txn_id);
+            return Err(err).with_context(|| format!("failed to send STUN request to {stun_url}"));
+        }
+        match timeout(Duration::from_millis(self.stun_timeout_ms), rx).await {
+            Ok(result) => result.map_err(|_| anyhow!("stun channel dropped")),
+            Err(err) => {
+                self.pending_stun.lock().await.remove(&txn_id);
+                Err(err).with_context(|| format!("stun timeout to {}", stun_url))
+            }
+        }
     }
 
     async fn local_client_endpoint(&self) -> Result<LegacyEndpoint> {

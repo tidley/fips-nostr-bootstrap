@@ -608,67 +608,40 @@ export class FipsNostrRendezvousNode extends EventEmitter {
         return current;
       }
 
-      return await new Promise((resolve) => {
-        let timeout = null;
-        let settleTimer = null;
-
-        const finish = () => {
-          if (timeout) clearTimeout(timeout);
-          if (settleTimer) clearTimeout(settleTimer);
-          this.off('advert:update', onAdvertUpdate);
-          resolve(this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers }));
-        };
-
-        const onAdvertUpdate = () => {
-          const matches = this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers });
-          if (matches.length === 0) return;
-          if (settleMs <= 0) {
-            finish();
-            return;
-          }
-          if (settleTimer) clearTimeout(settleTimer);
-          settleTimer = setTimeout(() => finish(), Math.max(0, settleMs));
-        };
-
-        this.on('advert:update', onAdvertUpdate);
-        timeout = setTimeout(() => finish(), waitMs);
-      });
+      return await this._collectAdvertisedPeersOnce({ waitMs, settleMs, excludedNpubs, filter, maxPeers });
     }
 
+    return await this._collectAdvertisedPeersOnce({ waitMs, settleMs, excludedNpubs, filter, maxPeers });
+  }
+
+  async _collectAdvertisedPeersOnce({ waitMs, settleMs, excludedNpubs, filter, maxPeers }) {
     return await new Promise((resolve) => {
       let timeout = null;
       let settleTimer = null;
-      const byPublisher = new Map();
+      let sub = null;
 
       const finish = () => {
         if (timeout) clearTimeout(timeout);
         if (settleTimer) clearTimeout(settleTimer);
-        try { sub.close(); } catch {}
-        resolve(sortAdverts([...byPublisher.values()]).slice(0, maxPeers));
+        try { sub?.close(); } catch {}
+        resolve(this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers }));
       };
 
-      const sub = this.pool.subscribeMany(
+      sub = this.pool.subscribeMany(
         this.advertRelays,
         { kinds: [ADVERT_KIND], since: Math.floor(Date.now() / 1000) - 3 * 24 * 60 * 60 },
         {
           onevent: (evt) => {
             try {
-              const msg = JSON.parse(evt.content);
-              if (!isTraversalAdvertMessage(msg)) return;
-              if (excludedNpubs.has(msg.publisherNpub)) return;
-              if (!filter(msg)) return;
-              const existing = byPublisher.get(msg.publisherNpub);
-              if (!existing || sortAdverts([msg, existing])[0] === msg) {
-                byPublisher.set(msg.publisherNpub, msg);
+              this._handleAdvertEvent(evt);
+              const matches = this._selectAdvertisedPeers({ excludedNpubs, filter, maxPeers });
+              if (matches.length === 0) return;
+              if (settleMs <= 0) {
+                finish();
+                return;
               }
-              if (byPublisher.size > 0) {
-                if (settleMs <= 0) {
-                  finish();
-                  return;
-                }
-                if (settleTimer) clearTimeout(settleTimer);
-                settleTimer = setTimeout(() => finish(), settleMs);
-              }
+              if (settleTimer) clearTimeout(settleTimer);
+              settleTimer = setTimeout(() => finish(), settleMs);
             } catch {
               // ignore malformed adverts
             }

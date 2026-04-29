@@ -12,8 +12,8 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use fips::AppCommand;
 use fips_nostr_rendezvous::fips_handoff::handoff_established_app_runtime;
+use fips_nostr_rendezvous::fips_handoff::AppCommand;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_offer, parse_punch_packet, parse_stun_url,
     plan_punch_targets, validate_traversal_answer_for_offer, LegacyEndpoint, LegacyHelloMessage,

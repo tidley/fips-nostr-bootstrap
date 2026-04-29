@@ -393,20 +393,27 @@ impl ServerState {
         let request = create_stun_binding_request(txn_id);
         let (tx, rx) = oneshot::channel();
         self.pending_stun.lock().await.insert(txn_id, tx);
-        self.udp_socket
+        if let Err(err) = self
+            .udp_socket
             .send_to(&request, format!("{}:{}", endpoint.host, endpoint.port))
             .await
-            .with_context(|| {
+        {
+            self.pending_stun.lock().await.remove(&txn_id);
+            return Err(err).with_context(|| {
                 format!(
                     "failed to send STUN request to {}:{}",
                     endpoint.host, endpoint.port
                 )
-            })?;
+            });
+        }
 
-        let mapped = timeout(Duration::from_millis(self.stun_timeout_ms), rx)
-            .await
-            .with_context(|| format!("STUN timeout waiting for {stun_url}"))?
-            .context("STUN channel dropped")?;
+        let mapped = match timeout(Duration::from_millis(self.stun_timeout_ms), rx).await {
+            Ok(result) => result.context("STUN channel dropped")?,
+            Err(err) => {
+                self.pending_stun.lock().await.remove(&txn_id);
+                return Err(err).with_context(|| format!("STUN timeout waiting for {stun_url}"));
+            }
+        };
         Ok(mapped)
     }
 

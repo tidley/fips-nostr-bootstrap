@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import { createServer } from 'node:http';
 
 export interface RelayEvent {
   id: string;
@@ -59,7 +60,8 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
   const subs = new Map<string, Subscription>();
   let connSeq = 0;
 
-  const wss = new WebSocketServer({ host, port });
+  const httpServer = createServer();
+  const wss = new WebSocketServer({ server: httpServer });
 
   wss.on('connection', (ws) => {
     const connId = `c${++connSeq}`;
@@ -126,11 +128,25 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
     });
   });
 
-  await new Promise<void>((resolve) => {
-    wss.once('listening', () => resolve());
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      httpServer.off('listening', onListening);
+      httpServer.off('error', onError);
+    };
+    const onListening = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    httpServer.once('listening', onListening);
+    httpServer.once('error', onError);
+    httpServer.listen(port, host);
   });
 
-  const address = wss.address();
+  const address = httpServer.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
   log('embedded relay listening', { host, port: actualPort });
 
@@ -140,6 +156,9 @@ export async function startEmbeddedRelay(opts: { host?: string; port?: number; l
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         wss.close((err) => (err ? reject(err) : resolve()));
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
       });
     },
   };

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { createSocket } from 'node:dgram';
 import net from 'node:net';
+import path from 'node:path';
 import { startEmbeddedRelay, type EmbeddedRelayServer } from './embedded_relay.js';
 
 const TEST_NSEC = 'nsec14hwdknxqm508ymsvlvtlydc6yy0t8rvken29pgzr3gd28xxgvx6qdqfawz';
@@ -59,9 +60,44 @@ type AppProcess = {
   close: () => Promise<void>;
 };
 
-function spawnRustProcess(args: string[], env: NodeJS.ProcessEnv): AppProcess {
-  const child = spawn('cargo', args, {
-    cwd: `${process.cwd()}/rust/fips-nostr-rendezvous`,
+const rustPackageDir = path.join(process.cwd(), 'rust/fips-nostr-rendezvous');
+
+function rustBinaryPath(name: string) {
+  return path.join(rustPackageDir, 'target/debug', process.platform === 'win32' ? `${name}.exe` : name);
+}
+
+function buildRustBinaries() {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      'cargo',
+      ['build', '--quiet', '--locked', '--bin', 'fips-shell-server', '--bin', 'fips-web-daemon'],
+      {
+        cwd: rustPackageDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    child.stdout.on('data', (chunk) => stdout.push(String(chunk)));
+    child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `cargo build failed with ${signal || code}\nstdout:\n${stdout.join('')}\nstderr:\n${stderr.join('')}`,
+        ),
+      );
+    });
+  });
+}
+
+function spawnRustProcess(bin: string, args: string[], env: NodeJS.ProcessEnv): AppProcess {
+  const child = spawn(rustBinaryPath(bin), args, {
+    cwd: rustPackageDir,
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -92,6 +128,7 @@ describe('rust runtime startup STUN integration', () => {
   let stunUrl: string;
 
   beforeAll(async () => {
+    await buildRustBinaries();
     relay = await startEmbeddedRelay({ port: 0 });
     stunServer = createSocket('udp4');
     await new Promise<void>((resolve, reject) => {
@@ -112,21 +149,19 @@ describe('rust runtime startup STUN integration', () => {
       const packet = Buffer.concat([response, xorMappedAddress('198.51.100.77', rinfo.port)]);
       stunServer.send(packet, rinfo.port, rinfo.address);
     });
-  });
+  }, 120000);
 
   afterAll(async () => {
     await relay?.close();
-    await new Promise<void>((resolve) => stunServer.close(() => resolve()));
+    if (stunServer) {
+      await new Promise<void>((resolve) => stunServer.close(() => resolve()));
+    }
   });
 
   it('shell server observes reflexive STUN address during startup', async () => {
     const app = spawnRustProcess(
+      'fips-shell-server',
       [
-        'run',
-        '--quiet',
-        '--bin',
-        'fips-shell-server',
-        '--',
         '--nsec',
         TEST_NSEC,
         '--udp-port',
@@ -149,12 +184,8 @@ describe('rust runtime startup STUN integration', () => {
   it('web daemon observes reflexive STUN address during startup', async () => {
     const httpPort = await reservePort();
     const app = spawnRustProcess(
+      'fips-web-daemon',
       [
-        'run',
-        '--quiet',
-        '--bin',
-        'fips-web-daemon',
-        '--',
         '--nsec',
         TEST_NSEC,
         '--http-port',

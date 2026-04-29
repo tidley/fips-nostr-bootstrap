@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use fips::AppCommand;
 use fips_nostr_rendezvous::fips_handoff::handoff_established_app_runtime;
+use fips_nostr_rendezvous::fips_handoff::AppCommand;
 use fips_nostr_rendezvous::{
     build_punch_packet, create_traversal_answer, decode_session_frame, encode_session_frame,
     parse_punch_packet, parse_stun_url, plan_punch_targets, EndpointHint, LegacyEndpoint,
